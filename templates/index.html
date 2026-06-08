@@ -250,6 +250,20 @@
     .remove-btn:hover { color: var(--red); }
     .no-recipients { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
 
+    .carrier-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.55rem 0.6rem;
+      color: var(--text);
+      font-size: 0.83rem;
+      outline: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: border-color 0.2s;
+    }
+    .carrier-select:focus { border-color: var(--accent); }
+
     /* ── Results ─────────────────────────────────────────────── */
     #results { display: flex; flex-direction: column; gap: 1.25rem; }
 
@@ -464,14 +478,29 @@
         </p>
       </div>
 
-      <div class="section-label">Recipients</div>
+      <!-- Email recipients -->
+      <div class="section-label">Email Recipients</div>
       <div class="add-row">
         <input id="new-email-input" type="email" placeholder="name@example.com"
           onkeydown="if(event.key==='Enter') addEmail()" />
         <button class="btn-primary" onclick="addEmail()">Add</button>
       </div>
       <ul class="recipient-list" id="recipient-list"></ul>
-      <p class="no-recipients" id="no-recipients-msg">No recipients yet — add one above.</p>
+      <p class="no-recipients" id="no-email-msg">No email recipients yet.</p>
+
+      <!-- SMS recipients -->
+      <div class="section-label" style="margin-top:1.25rem">Text Message Recipients</div>
+      <div class="add-row">
+        <input id="new-phone-input" type="tel" placeholder="10-digit number (e.g. 2025551234)"
+          onkeydown="if(event.key==='Enter') addPhone()" />
+        <select id="carrier-select" class="carrier-select">
+          <option value="">Carrier…</option>
+        </select>
+        <button class="btn-primary" onclick="addPhone()">Add</button>
+      </div>
+      <ul class="recipient-list" id="phone-list"></ul>
+      <p class="no-recipients" id="no-phone-msg">No phone recipients yet.</p>
+      <p class="smtp-hint">Uses your SMTP to deliver via carrier gateway — no extra accounts needed.</p>
 
     </div>
   </div>
@@ -532,8 +561,7 @@
 
   function renderRecipients(emails) {
     const list  = $id('recipient-list');
-    const empty = $id('no-recipients-msg');
-    $id('email-count').textContent = emails.length;
+    const empty = $id('no-email-msg');
     list.innerHTML = '';
     empty.style.display = emails.length ? 'none' : 'block';
     emails.forEach(email => {
@@ -544,17 +572,75 @@
         '<button class="remove-btn" onclick="removeEmail(\'' + esc(email) + '\')" title="Remove">✕</button>';
       list.appendChild(li);
     });
+    updateRecipientCount();
     refreshSendBtn();
   }
 
   function refreshSendBtn() {
-    const count = parseInt($id('email-count').textContent, 10) || 0;
-    $id('email-btn').disabled = !(count > 0 && allResults.length > 0);
+    const total = parseInt($id('email-count').textContent, 10) || 0;
+    $id('email-btn').disabled = !(total > 0 && allResults.length > 0);
   }
 
   async function loadRecipients() {
-    const emails = await fetch('/api/emails').then(r => r.json());
+    const [emails, phones] = await Promise.all([
+      fetch('/api/emails').then(r => r.json()),
+      fetch('/api/phones').then(r => r.json()),
+    ]);
     renderRecipients(emails);
+    renderPhones(phones);
+  }
+
+  async function loadCarriers() {
+    const carriers = await fetch('/api/carriers').then(r => r.json());
+    const sel = $id('carrier-select');
+    carriers.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = opt.textContent = c;
+      sel.appendChild(opt);
+    });
+  }
+
+  function renderPhones(phones) {
+    const list  = $id('phone-list');
+    const empty = $id('no-phone-msg');
+    list.innerHTML = '';
+    empty.style.display = phones.length ? 'none' : 'block';
+    phones.forEach(p => {
+      const li = document.createElement('li');
+      li.className = 'recipient-item';
+      li.innerHTML =
+        '<span>' + esc(p.number) + ' <span style="color:var(--muted);font-size:0.78rem">(' + esc(p.carrier) + ')</span></span>' +
+        '<button class="remove-btn" onclick="removePhone(\'' + esc(p.number) + '\',\'' + esc(p.carrier) + '\')" title="Remove">✕</button>';
+      list.appendChild(li);
+    });
+    updateRecipientCount();
+  }
+
+  function updateRecipientCount() {
+    const emails = $id('recipient-list').children.length;
+    const phones = $id('phone-list').children.length;
+    $id('email-count').textContent = emails + phones;
+  }
+
+  async function addPhone() {
+    const number  = $id('new-phone-input').value.trim();
+    const carrier = $id('carrier-select').value;
+    if (!number || !carrier) { alert('Enter a phone number and select a carrier.'); return; }
+    const result = await fetch('/api/phones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number, carrier }),
+    }).then(r => r.json());
+    if (result.error) { alert(result.error); return; }
+    $id('new-phone-input').value = '';
+    $id('carrier-select').value  = '';
+    renderPhones(result);
+  }
+
+  async function removePhone(number, carrier) {
+    const phones = await fetch('/api/phones/' + encodeURIComponent(number) + '/' + encodeURIComponent(carrier), { method: 'DELETE' })
+      .then(r => r.json());
+    renderPhones(phones);
   }
 
   async function addEmail() {
@@ -829,6 +915,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     loadRecipients();
     loadSmtpConfig();
+    loadCarriers();
   });
 </script>
 

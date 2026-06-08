@@ -43,7 +43,23 @@ app = Flask(__name__)
 DEFAULT_PLAYLIST = "https://open.spotify.com/playlist/3eyYxErnxrMTDE6m8zy57w"
 
 EMAILS_FILE    = Path(__file__).parent / "emails.json"
+PHONES_FILE    = Path(__file__).parent / "phones.json"
 MAIL_CFG_FILE  = Path(__file__).parent / "mail_config.json"
+
+# Each carrier's email-to-SMS gateway — free, no extra accounts needed
+SMS_GATEWAYS = {
+    "AT&T":        "@txt.att.net",
+    "Verizon":     "@vtext.com",
+    "T-Mobile":    "@tmomail.net",
+    "Sprint":      "@messaging.sprintpcs.com",
+    "Boost":       "@sms.myboostmobile.com",
+    "Cricket":     "@sms.cricketwireless.net",
+    "Metro PCS":   "@mymetropcs.com",
+    "US Cellular": "@email.uscc.net",
+    "Rogers":      "@pcs.rogers.com",
+    "Bell":        "@txt.bell.ca",
+    "Telus":       "@msg.telus.com",
+}
 
 # Persistent Chrome profile so Spotify login is remembered between runs
 SPOTIFY_PROFILE = Path.home() / ".concert-finder-spotify-profile"
@@ -372,20 +388,30 @@ def liked_songs_stream():
             # ── Step 1: scrape Liked Songs ───────────────────────
             yield sse("status", {"message": "Opening Spotify in a browser window..."})
             driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
-            driver.get("https://open.spotify.com/collection/tracks")
+
+            # Navigate directly to Liked Songs; if the session is valid we land there.
+            # If not, redirect to the login page with a continue= so Spotify sends us
+            # back to Liked Songs automatically after the user signs in.
+            LIKED_SONGS_URL = "https://open.spotify.com/collection/tracks"
+            LOGIN_URL = (
+                "https://accounts.spotify.com/login"
+                "?continue=https%3A%2F%2Fopen.spotify.com%2Fcollection%2Ftracks"
+            )
+
+            driver.get(LIKED_SONGS_URL)
             time.sleep(3)
 
-            # If not already logged in, wait for the user to do so (up to 3 min)
-            if "login" in driver.current_url or "accounts.spotify.com" in driver.current_url:
+            # Not on the liked-songs page → session expired or not logged in
+            if "collection/tracks" not in driver.current_url:
+                driver.get(LOGIN_URL)
                 yield sse("login_required", {
-                    "message": "A browser window opened — log into Spotify there. This only happens once."
+                    "message": "Please log into Spotify in the browser window. "
+                               "Once logged in you will be taken straight to your Liked Songs."
                 })
                 try:
+                    # Wait up to 3 minutes for the user to log in and land on Liked Songs
                     WebDriverWait(driver, 180).until(
-                        lambda d: (
-                            "collection/tracks" in d.current_url
-                            or len(d.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']")) > 0
-                        )
+                        lambda d: "collection/tracks" in d.current_url
                     )
                     time.sleep(2)
                 except Exception:
@@ -486,6 +512,54 @@ def remove_email(email):
 
 
 # ---------------------------------------------------------------------------
+# Phone numbers — /api/phones
+# ---------------------------------------------------------------------------
+
+def _load_phones() -> list:
+    try:
+        return json.loads(PHONES_FILE.read_text()) if PHONES_FILE.exists() else []
+    except Exception:
+        return []
+
+
+def _save_phones(phones: list):
+    PHONES_FILE.write_text(json.dumps(phones, indent=2))
+
+
+@app.route("/api/phones", methods=["GET"])
+def get_phones():
+    return jsonify(_load_phones())
+
+
+@app.route("/api/phones", methods=["POST"])
+def add_phone():
+    data    = request.json or {}
+    number  = re.sub(r"\D", "", data.get("number", ""))   # digits only
+    carrier = data.get("carrier", "").strip()
+    if len(number) < 10 or carrier not in SMS_GATEWAYS:
+        return jsonify({"error": "Invalid number or carrier"}), 400
+    phones = _load_phones()
+    entry  = {"number": number, "carrier": carrier}
+    if entry not in phones:
+        phones.append(entry)
+        _save_phones(phones)
+    return jsonify(_load_phones())
+
+
+@app.route("/api/phones/<number>/<carrier>", methods=["DELETE"])
+def remove_phone(number, carrier):
+    phones = [p for p in _load_phones()
+              if not (p["number"] == number and p["carrier"] == carrier)]
+    _save_phones(phones)
+    return jsonify(phones)
+
+
+@app.route("/api/carriers", methods=["GET"])
+def get_carriers():
+    return jsonify(list(SMS_GATEWAYS.keys()))
+
+
+# ---------------------------------------------------------------------------
 # Mail config — /api/mail-config
 # ---------------------------------------------------------------------------
 
@@ -583,6 +657,28 @@ def _build_email_html(results: list, playlist_name: str) -> str:
 </body></html>"""
 
 
+def _build_sms_text(results: list, playlist_name: str) -> str:
+    """Compact plain-text version for SMS (keeps each message short)."""
+    flat = sorted(
+        [{"artist": r["artist"], **c} for r in results for c in r["concerts"]],
+        key=lambda x: x.get("date_raw", ""),
+    )
+    lines = [f"Concert Alert — {playlist_name}", ""]
+    for c in flat[:8]:                         # cap at 8 shows to keep SMS short
+        date = c.get("date", "TBA").split(",")[0]   # e.g. "Saturday, June 14, 2026" → "Saturday"
+        # Just month + day is cleaner for SMS
+        try:
+            dt   = datetime.fromisoformat(c["date_raw"].replace("Z", "+00:00"))
+            date = dt.strftime("%b %-d")
+        except Exception:
+            pass
+        lines.append(f"{c['artist']}")
+        lines.append(f"  {date} · {c.get('venue', c.get('city', ''))[:30]}, {c.get('city', '')}")
+    if len(flat) > 8:
+        lines.append(f"...and {len(flat) - 8} more")
+    return "\n".join(lines)
+
+
 @app.route("/api/send-report", methods=["POST"])
 def send_report():
     data          = request.json or {}
@@ -590,8 +686,10 @@ def send_report():
     playlist_name = data.get("playlist_name", "My Playlist")
 
     emails = _load_emails()
-    if not emails:
-        return jsonify({"error": "No email recipients configured"}), 400
+    phones = _load_phones()
+
+    if not emails and not phones:
+        return jsonify({"error": "No email or phone recipients configured"}), 400
 
     cfg = _load_mail_cfg()
     if not cfg.get("smtp_user") or not cfg.get("smtp_pass"):
@@ -601,6 +699,7 @@ def send_report():
         return jsonify({"error": "No concert results to send"}), 400
 
     html_body  = _build_email_html(results, playlist_name)
+    sms_body   = _build_sms_text(results, playlist_name)
     show_count = sum(len(r["concerts"]) for r in results)
     subject    = f"{show_count} upcoming show{'s' if show_count != 1 else ''} — {playlist_name}"
 
@@ -610,6 +709,7 @@ def send_report():
         server.starttls()
         server.login(cfg["smtp_user"], cfg["smtp_pass"])
 
+        # ── Email recipients ────────────────────────────────────
         for to_addr in emails:
             msg            = MIMEMultipart("alternative")
             msg["Subject"] = subject
@@ -620,7 +720,21 @@ def send_report():
                 server.sendmail(cfg["smtp_user"], to_addr, msg.as_string())
                 sent.append(to_addr)
             except Exception as e:
-                errors.append({"email": to_addr, "error": str(e)})
+                errors.append({"to": to_addr, "error": str(e)})
+
+        # ── SMS via email-to-text gateways ──────────────────────
+        for phone in phones:
+            gateway  = SMS_GATEWAYS.get(phone["carrier"], "")
+            sms_addr = f"{phone['number']}{gateway}"
+            msg            = MIMEText(sms_body, "plain")
+            msg["Subject"] = ""    # carriers often ignore subject; keep body concise
+            msg["From"]    = cfg["smtp_user"]
+            msg["To"]      = sms_addr
+            try:
+                server.sendmail(cfg["smtp_user"], sms_addr, msg.as_string())
+                sent.append(f"{phone['number']} ({phone['carrier']})")
+            except Exception as e:
+                errors.append({"to": sms_addr, "error": str(e)})
 
         server.quit()
     except Exception as e:
