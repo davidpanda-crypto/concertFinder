@@ -329,6 +329,61 @@
       margin-bottom: 1.5rem; font-size: 0.9rem;
     }
 
+    /* ── Liked Songs button ──────────────────────────────────── */
+    .liked-songs-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.9rem;
+    }
+    .divider-text { font-size: 0.8rem; color: var(--muted); }
+    .btn-liked {
+      background: none;
+      border: 1px solid #1DB954;
+      color: #1DB954;
+      border-radius: 8px;
+      padding: 0.5rem 1.1rem;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .btn-liked:hover:not(:disabled) { background: #1DB954; color: #000; }
+    .btn-liked:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Login overlay ───────────────────────────────────────── */
+    #login-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #login-overlay.visible { display: flex; }
+    #login-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      max-width: 380px;
+      width: 90%;
+      text-align: center;
+    }
+    #login-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+    #login-box h3 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+    #login-box p  { font-size: 0.88rem; color: var(--muted); line-height: 1.5; }
+    .login-spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: #1DB954;
+      border-radius: 50%;
+      margin: 1.25rem auto 0;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* ── Responsive ──────────────────────────────────────────── */
     @media (max-width: 540px) {
       header h1 { font-size: 1.6rem; }
@@ -356,9 +411,25 @@
         onkeydown="if(event.key==='Enter') startSearch()" />
       <button class="btn-primary" id="search-btn" onclick="startSearch()">Find Concerts</button>
     </div>
+    <div class="liked-songs-row">
+      <span class="divider-text">or</span>
+      <button class="btn-liked" id="liked-btn" onclick="startLikedSongs()">
+        ♥ Scan My Liked Songs
+      </button>
+    </div>
     <div id="playlist-pill">
       <img id="pill-img" src="" alt="" />
       <span id="pill-name"></span>
+    </div>
+  </div>
+
+  <!-- Login overlay (shown when browser window opens) -->
+  <div id="login-overlay">
+    <div id="login-box">
+      <div id="login-icon">&#9835;</div>
+      <h3>Log into Spotify</h3>
+      <p id="login-msg">A browser window just opened. Log into Spotify there — this only happens once.</p>
+      <div class="login-spinner"></div>
     </div>
   </div>
 
@@ -555,41 +626,35 @@
     refreshSendBtn();
   }
 
-  // ── Search ───────────────────────────────────────────────────
-  function startSearch() {
-    const url = $id('playlist-url').value.trim();
-    if (!url) return;
-
+  // ── Shared helpers ───────────────────────────────────────────
+  function resetResultsUI() {
     allResults    = [];
     playlistLabel = 'Concert Report';
-
-    $id('results').innerHTML          = '';
-    $id('summary-row').style.display  = 'none';
-    $id('summary').textContent        = '';
+    $id('results').innerHTML              = '';
+    $id('summary-row').style.display      = 'none';
+    $id('summary').textContent            = '';
     $id('progress-section').style.display = 'block';
-    $id('bar-fill').style.width       = '0%';
-    $id('bar-label').textContent      = '';
-    $id('playlist-pill').style.display = 'none';
-    setSearchBtn(true);
+    $id('bar-fill').style.width           = '0%';
+    $id('bar-label').textContent          = '';
+    $id('playlist-pill').style.display    = 'none';
+  }
 
-    if (es) es.close();
-    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url));
-
+  // Attaches the standard SSE event listeners to an already-open EventSource.
+  // Both playlist search and liked-songs share these handlers.
+  function attachConcertListeners() {
     es.addEventListener('status', e => setStatusText(JSON.parse(e.data).message));
 
     es.addEventListener('playlist_info', e => {
-      const d   = JSON.parse(e.data);
-      const img = $id('pill-img');
+      const d = JSON.parse(e.data);
       playlistLabel           = d.name || 'Concert Report';
-      img.src                 = d.image || '';
-      img.style.display       = d.image ? 'block' : 'none';
-      $id('pill-name').textContent = playlistLabel;
+      $id('pill-img').src     = d.image || '';
+      $id('pill-img').style.display = d.image ? 'block' : 'none';
+      $id('pill-name').textContent  = playlistLabel;
       $id('playlist-pill').style.display = 'flex';
     });
 
     es.addEventListener('artists_found', e => {
-      const { count } = JSON.parse(e.data);
-      setStatusText('Found ' + count + ' artists — searching for shows...');
+      setStatusText('Found ' + JSON.parse(e.data).count + ' artists — searching for shows...');
     });
 
     es.addEventListener('progress', e => {
@@ -611,6 +676,7 @@
       es.close();
       $id('progress-section').style.display = 'none';
       setSearchBtn(false);
+      $id('liked-btn').disabled = false;
 
       $id('summary-row').style.display = 'flex';
       $id('dl-btn').style.display = artists_with_shows > 0 ? '' : 'none';
@@ -623,7 +689,7 @@
           ' with upcoming shows out of ' + total_artists + ' in the playlist.';
       } else {
         $id('summary').textContent =
-          'No upcoming shows found in any watched city for the ' + total_artists + ' artists in this playlist.';
+          'No upcoming shows found in any watched city for the ' + total_artists + ' artists.';
         $id('results').innerHTML =
           '<div class="empty-state"><h3>No shows found</h3>' +
           '<p>Try a different playlist or check back when your artists announce new dates.</p></div>';
@@ -631,16 +697,56 @@
     });
 
     es.addEventListener('error', e => {
+      $id('login-overlay').classList.remove('visible');
       if (e.data) {
         $id('results').innerHTML =
           '<div class="error-box">' + esc(JSON.parse(e.data).message) + '</div>';
       }
       finishSearch();
+      $id('liked-btn').disabled = false;
     });
 
     es.onerror = () => {
-      if ($id('search-btn').disabled) finishSearch();
+      $id('login-overlay').classList.remove('visible');
+      if ($id('search-btn').disabled) {
+        finishSearch();
+        $id('liked-btn').disabled = false;
+      }
     };
+  }
+
+  // ── Liked Songs ──────────────────────────────────────────────
+  function startLikedSongs() {
+    resetResultsUI();
+    setSearchBtn(true);
+    $id('liked-btn').disabled = true;
+
+    if (es) es.close();
+    es = new EventSource('/api/liked-songs');
+
+    // Show login overlay when server says browser window opened
+    es.addEventListener('login_required', e => {
+      $id('login-msg').textContent = JSON.parse(e.data).message;
+      $id('login-overlay').classList.add('visible');
+    });
+
+    // Hide login overlay once we're past the login step
+    es.addEventListener('playlist_info', () => $id('login-overlay').classList.remove('visible'));
+
+    attachConcertListeners();
+  }
+
+  // ── Search ───────────────────────────────────────────────────
+  // ── Playlist search ──────────────────────────────────────────
+  function startSearch() {
+    const url = $id('playlist-url').value.trim();
+    if (!url) return;
+    resetResultsUI();
+    setSearchBtn(true);
+    $id('liked-btn').disabled = true;
+    if (es) es.close();
+    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url));
+    attachConcertListeners();
   }
 
   function finishSearch() {

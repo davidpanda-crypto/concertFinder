@@ -42,8 +42,11 @@ app = Flask(__name__)
 
 DEFAULT_PLAYLIST = "https://open.spotify.com/playlist/3eyYxErnxrMTDE6m8zy57w"
 
-EMAILS_FILE   = Path(__file__).parent / "emails.json"
-MAIL_CFG_FILE = Path(__file__).parent / "mail_config.json"
+EMAILS_FILE    = Path(__file__).parent / "emails.json"
+MAIL_CFG_FILE  = Path(__file__).parent / "mail_config.json"
+
+# Persistent Chrome profile so Spotify login is remembered between runs
+SPOTIFY_PROFILE = Path.home() / ".concert-finder-spotify-profile"
 
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -80,11 +83,19 @@ _ARTIST_SELECTORS = [
 ]
 
 
-def _make_driver() -> webdriver.Chrome:
+def _make_driver(headless: bool = True, profile_dir: Path = None) -> webdriver.Chrome:
+    """
+    Create a Chrome WebDriver.
+    headless=False opens a visible window (used for Spotify login).
+    profile_dir persists cookies/session across runs.
+    """
     opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
+    if headless:
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+    if profile_dir:
+        opts.add_argument(f"--user-data-dir={profile_dir}")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_argument(f"user-agent={BROWSER_UA}")
@@ -118,7 +129,7 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
     Scrolls 600 px at a time until the artist list stabilises for 4 rounds,
     ensuring all lazy-loaded tracks are captured.
     """
-    driver = _make_driver()
+    driver = _make_driver(headless=True)
     try:
         driver.get(playlist_url)
 
@@ -328,6 +339,143 @@ def concerts_stream():
 
         except Exception as e:
             yield sse("error", {"message": str(e)})
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Liked Songs — /api/liked-songs  (opens a visible browser for login)
+# ---------------------------------------------------------------------------
+
+def _scroll_and_harvest(driver, max_scrolls: int = 300) -> dict:
+    """
+    Scroll through a Spotify page and collect every unique artist link.
+    Stops after 4 consecutive scrolls with no new artists found.
+    """
+    all_artists: dict = {}
+    last_count = stable_rounds = 0
+
+    for _ in range(max_scrolls):
+        all_artists.update(_harvest_artists(driver))
+        if len(all_artists) == last_count:
+            stable_rounds += 1
+            if stable_rounds >= 4:
+                break
+        else:
+            stable_rounds = 0
+            last_count = len(all_artists)
+        driver.execute_script("window.scrollBy(0, 600)")
+        time.sleep(0.7)
+
+    all_artists.update(_harvest_artists(driver))
+    return all_artists
+
+
+@app.route("/api/liked-songs")
+def liked_songs_stream():
+    """
+    SSE stream that:
+      1. Opens a visible Chrome window (with persistent login) to scrape
+         the user's private Liked Songs library.
+      2. Then searches Last.fm for upcoming shows — emitting the same
+         playlist_info / artists_found / progress / result / done events
+         as /api/concerts so the frontend needs no extra handling.
+    """
+    SPOTIFY_PROFILE.mkdir(parents=True, exist_ok=True)
+
+    def generate():
+        driver = None
+        try:
+            # ── Step 1: scrape Liked Songs ───────────────────────
+            yield sse("status", {"message": "Opening Spotify in a browser window..."})
+            driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+            driver.get("https://open.spotify.com/collection/tracks")
+            time.sleep(3)
+
+            # If not already logged in, wait for the user to do so (up to 3 min)
+            if "login" in driver.current_url or "accounts.spotify.com" in driver.current_url:
+                yield sse("login_required", {
+                    "message": "A browser window opened — log into Spotify there. This only happens once."
+                })
+                try:
+                    WebDriverWait(driver, 180).until(
+                        lambda d: (
+                            "collection/tracks" in d.current_url
+                            or len(d.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']")) > 0
+                        )
+                    )
+                    time.sleep(2)
+                except Exception:
+                    yield sse("error", {"message": "Login timed out — please try again."})
+                    return
+
+            yield sse("status", {"message": "Reading your Liked Songs..."})
+
+            try:
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
+                )
+            except Exception:
+                pass
+
+            # Scroll through the full library
+            artists_map: dict = {}
+            last_count = stable_rounds = 0
+
+            for _ in range(300):
+                artists_map.update(_harvest_artists(driver))
+                if len(artists_map) == last_count:
+                    stable_rounds += 1
+                    if stable_rounds >= 4:
+                        break
+                else:
+                    stable_rounds = 0
+                    last_count = len(artists_map)
+                    yield sse("status", {"message": f"Reading Liked Songs… {len(artists_map)} artists found"})
+                driver.execute_script("window.scrollBy(0, 600)")
+                time.sleep(0.7)
+
+            artists_map.update(_harvest_artists(driver))
+            driver.quit()
+            driver = None
+
+            if not artists_map:
+                yield sse("error", {"message": "No artists found — are you logged into Spotify?"})
+                return
+
+            yield sse("playlist_info", {"name": "Liked Songs", "image": ""})
+            artists = sorted(artists_map)
+            yield sse("artists_found", {"count": len(artists)})
+            yield sse("status", {"message": f"Searching {len(artists)} artists on Last.fm..."})
+
+            # ── Step 2: find concerts (same as /api/concerts) ────
+            found_count = 0
+            for i, artist in enumerate(artists):
+                yield sse("progress", {"current": i + 1, "total": len(artists), "artist": artist})
+                concerts = find_concerts(artist)
+                if concerts:
+                    found_count += 1
+                    yield sse("result", {
+                        "artist":      artist,
+                        "spotify_url": artists_map.get(artist, ""),
+                        "concerts":    concerts,
+                    })
+                time.sleep(0.3)
+
+            yield sse("done", {"total_artists": len(artists), "artists_with_shows": found_count})
+
+        except Exception as e:
+            yield sse("error", {"message": str(e)})
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
     return Response(
         stream_with_context(generate()),
