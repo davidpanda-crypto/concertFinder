@@ -80,54 +80,89 @@ def _make_driver() -> webdriver.Chrome:
 # Spotify — headless browser scrape (no API key needed)
 # ---------------------------------------------------------------------------
 
+# Selectors for track-row artist links (most specific first)
+_ARTIST_SELECTORS = [
+    "[data-testid='tracklist-row'] a[href*='/artist/']",   # standard playlist row
+    "[data-testid='track-list-row'] a[href*='/artist/']",
+    "div[aria-rowindex] a[href*='/artist/']",
+    "a[href*='/artist/']",                                  # broad fallback
+]
+
+def _harvest_artists(driver) -> dict:
+    """Pull every unique artist link visible in the current DOM state."""
+    artists = {}
+    for selector in _ARTIST_SELECTORS:
+        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        if elements:
+            for a in elements:
+                name = (a.text or "").strip()
+                href = (a.get_attribute("href") or "")
+                if name and "/artist/" in href and name not in artists:
+                    artists[name] = href
+            break   # use the first selector that actually returns something
+    return artists
+
+
 def scrape_spotify_playlist(playlist_url: str) -> tuple:
     """
     Returns (playlist_name, playlist_image_url, {artist_name: spotify_url}).
-    Uses a headless Chrome session so no Spotify credentials are required.
+    Scrolls through the full playlist so virtual-DOM lazy-loading is triggered.
     """
     driver = _make_driver()
     try:
         driver.get(playlist_url)
 
-        # Wait for at least one artist link to appear
+        # 1. Wait for the tracklist to appear (up to 25s)
         try:
-            WebDriverWait(driver, 20).until(
+            WebDriverWait(driver, 25).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
             )
         except Exception:
-            pass  # fall through and collect whatever loaded
-
-        # Scroll down repeatedly to trigger lazy-loading of all tracks
-        prev_count = 0
-        for _ in range(30):
-            links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']")
-            if len(links) == prev_count:
-                break
-            prev_count = len(links)
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1.2)
-
-        # Playlist name from page title  ("Playlist name - playlist by … | Spotify")
-        title = driver.title
-        playlist_name = title.split(" - playlist")[0].strip() if " - playlist" in title else title
-
-        # Playlist cover image
-        playlist_image = ""
-        try:
-            img = driver.find_element(By.CSS_SELECTOR, "img[data-testid='playlist-image'], .cover-art img")
-            playlist_image = img.get_attribute("src") or ""
-        except Exception:
             pass
 
-        # Collect unique artists
-        artists: dict = {}
-        for a in driver.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']"):
-            name = a.text.strip()
-            href = a.get_attribute("href") or ""
-            if name and name not in artists:
-                artists[name] = href
+        # 2. Incremental scroll: move 600 px at a time, harvest after each step.
+        #    Stop when the artist count is stable for 4 consecutive scrolls.
+        all_artists: dict = {}
+        stable_rounds = 0
+        last_count    = 0
 
-        return playlist_name, playlist_image, artists
+        for _ in range(80):                         # hard cap: 80 scroll steps
+            all_artists.update(_harvest_artists(driver))
+
+            if len(all_artists) == last_count:
+                stable_rounds += 1
+                if stable_rounds >= 4:
+                    break                           # nothing new — we're done
+            else:
+                stable_rounds = 0
+                last_count = len(all_artists)
+
+            driver.execute_script("window.scrollBy(0, 600)")
+            time.sleep(0.7)
+
+        # 3. Final sweep after scroll settles
+        all_artists.update(_harvest_artists(driver))
+
+        # 4. Playlist name from page title
+        title         = driver.title
+        playlist_name = title.split(" - playlist")[0].strip() if " - playlist" in title else title
+
+        # 5. Cover image
+        playlist_image = ""
+        for img_sel in (
+            "img[data-testid='playlist-image']",
+            ".cover-art img",
+            "img[src*='mosaic']",
+        ):
+            try:
+                el = driver.find_element(By.CSS_SELECTOR, img_sel)
+                playlist_image = el.get_attribute("src") or ""
+                if playlist_image:
+                    break
+            except Exception:
+                pass
+
+        return playlist_name, playlist_image, all_artists
 
     finally:
         driver.quit()
@@ -160,39 +195,116 @@ def _city_label(location_text: str) -> Optional[str]:
     return None
 
 
+def _clean_name(name: str) -> str:
+    """Strip featuring credits, punctuation noise, and normalise for search."""
+    # Remove feat./ft. suffixes:  "Artist feat. Other" → "Artist"
+    name = re.sub(r'\s*(feat\.?|ft\.?|featuring)\s+.*', '', name, flags=re.I)
+    # Remove parenthetical suffixes: "Artist (Official)" → "Artist"
+    name = re.sub(r'\s*\(.*?\)', '', name)
+    # Collapse extra whitespace
+    return name.strip()
+
+
+def _name_variants(name: str) -> list:
+    """Return a list of search queries to try, most specific first."""
+    cleaned = _clean_name(name)
+    variants = [name]
+    if cleaned != name:
+        variants.append(cleaned)
+    # If name has & or and, try just the first part
+    for sep in [" & ", " and "]:
+        if sep in name.lower():
+            first = re.split(sep, name, maxsplit=1, flags=re.I)[0].strip()
+            if first not in variants:
+                variants.append(first)
+    return variants
+
+
+def _name_matches(result_text: str, artist_name: str) -> bool:
+    """Check whether a Songkick result name is a plausible match."""
+    result = result_text.lower().strip()
+    target = _clean_name(artist_name).lower().strip()
+    # Exact or near-exact match
+    if target in result or result in target:
+        return True
+    # At least half the significant words match
+    words = [w for w in target.split() if len(w) > 2]
+    if not words:
+        return True
+    matches = sum(1 for w in words if w in result)
+    return matches / len(words) >= 0.5
+
+
 def _songkick_artist_path(artist_name: str) -> Optional[str]:
-    query = urllib.parse.quote_plus(artist_name)
-    soup = _soup(f"https://www.songkick.com/search?utf8=%E2%9C%93&query={query}&type=artists")
+    """
+    Search Songkick for the artist.
+    Search results live in <li class="artist"> items; the name is in the
+    nested <p class="summary"> — NOT in the <a> element itself.
+    """
+    for variant in _name_variants(artist_name):
+        query = urllib.parse.quote_plus(variant)
+        try:
+            soup = _soup(
+                f"https://www.songkick.com/search?utf8=%E2%9C%93&query={query}&type=artists"
+            )
+        except Exception:
+            continue
 
-    for a in soup.select("ul.artists-search-results li a, .search-results .artist a"):
-        href = a.get("href", "")
-        if "/artists/" in href:
-            return href.split("?")[0]
+        # Songkick search results: <li class="artist"> … <p class="summary">Name</p>
+        for li in soup.find_all("li", class_="artist"):
+            # Get the artist link (href contains /artists/NNN-slug)
+            a = li.find("a", href=re.compile(r"/artists/\d+"))
+            if not a:
+                continue
+            href = a.get("href", "").split("?")[0]
 
-    m = re.search(r'href="(/artists/\d+-[^"?]+)"', soup.decode_contents())
-    return m.group(1) if m else None
+            # Get the displayed name from the summary paragraph
+            summary = li.find("p", class_="summary")
+            displayed = summary.get_text(strip=True) if summary else a.get_text(strip=True)
+
+            if _name_matches(displayed, artist_name):
+                return href
+
+    return None
 
 
 def _parse_events(artist_path: str) -> list:
-    """Scrape the artist's Songkick calendar and return events in any watched city."""
-    soup = _soup(f"https://www.songkick.com{artist_path}/calendar")
+    """Scrape the artist's Songkick calendar; return events in any watched city."""
+    try:
+        soup = _soup(f"https://www.songkick.com{artist_path}/calendar")
+    except Exception:
+        return []
+
     events = []
 
-    for li in soup.select("li.event-listing, li[class*='event']"):
-        loc_el = li.select_one(".location, .venue-location, [class*='location']")
+    for li in soup.select(
+        "li.event-listing, "
+        "li[class*='event-listing'], "
+        "li.concert, "
+        "li[class*='concert']"
+    ):
+        # ── Location ────────────────────────────────────────────────
+        loc_el = li.select_one(
+            ".location, .venue-location, [class*='location'], "
+            ".summary .location, em.location"
+        )
         location_text = loc_el.get_text(" ", strip=True) if loc_el else ""
         city = _city_label(location_text)
         if not city:
             continue
 
+        # ── Event name ───────────────────────────────────────────────
         name_el = (
-            li.select_one(".event-description strong, .primary-detail, h3 a, .summary a")
+            li.select_one(".event-description strong")
+            or li.select_one(".summary strong")
+            or li.select_one("h3 a")
             or li.select_one("a[href*='/concerts/']")
             or li.select_one("a[href*='/events/']")
         )
-        event_name = name_el.get_text(strip=True) if name_el else artist_path.split("-", 1)[-1].title()
+        event_name = name_el.get_text(strip=True) if name_el else ""
 
-        time_el = li.select_one("time")
+        # ── Date & time ──────────────────────────────────────────────
+        time_el  = li.select_one("time")
         date_raw = time_el.get("datetime", "") if time_el else ""
         date_display = time_display = ""
         if date_raw:
@@ -203,19 +315,24 @@ def _parse_events(artist_path: str) -> list:
             except Exception:
                 date_display = date_raw
 
-        venue_el = li.select_one(".venue-name, .venue, [class*='venue']")
-        venue = venue_el.get_text(strip=True) if venue_el else city
+        # ── Venue ────────────────────────────────────────────────────
+        venue_el = li.select_one(
+            ".venue-name, strong.venue, "
+            "[class*='venue-name'], .summary .venue"
+        )
+        venue = venue_el.get_text(strip=True) if venue_el else ""
 
-        link_el = name_el or li.select_one("a[href]")
-        href = (link_el.get("href", "") if link_el else "")
-        ticket_url = ("https://www.songkick.com" + href) if href.startswith("/") else href
+        # ── Ticket URL ───────────────────────────────────────────────
+        link_el    = name_el or li.select_one("a[href]")
+        raw_href   = (link_el.get("href", "") if link_el else "")
+        ticket_url = ("https://www.songkick.com" + raw_href) if raw_href.startswith("/") else raw_href
 
         events.append({
-            "event_name":  event_name,
+            "event_name":  event_name or city,
             "date":        date_display or "TBA",
             "date_raw":    date_raw,
             "time":        time_display,
-            "venue":       venue,
+            "venue":       venue or city,
             "city":        city,
             "tickets_url": ticket_url,
         })
@@ -224,6 +341,7 @@ def _parse_events(artist_path: str) -> list:
 
 
 def find_concerts(artist_name: str) -> list:
+    """Find upcoming shows for one artist across all watched cities."""
     try:
         path = _songkick_artist_path(artist_name)
         return _parse_events(path) if path else []
