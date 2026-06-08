@@ -290,6 +290,18 @@
       color: var(--muted);
     }
 
+    .city-badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--accent);
+      background: rgba(168,85,247,0.12);
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      vertical-align: middle;
+      letter-spacing: 0.02em;
+    }
+
     .price-chip {
       display: inline-block;
       font-size: 0.72rem;
@@ -315,6 +327,214 @@
     }
 
     .tix-btn:hover { opacity: 0.88; }
+
+    /* ---- Email panel ---- */
+    .email-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      margin-bottom: 1.75rem;
+      overflow: hidden;
+    }
+
+    .email-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .email-panel-header:hover { background: rgba(255,255,255,.03); }
+
+    .email-panel-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .email-count-badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      background: var(--accent);
+      color: #fff;
+      padding: 0.1rem 0.5rem;
+      border-radius: 99px;
+    }
+
+    .chevron {
+      font-size: 0.75rem;
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+    .chevron.open { transform: rotate(180deg); }
+
+    .email-panel-body {
+      display: none;
+      padding: 0 1.25rem 1.25rem;
+      border-top: 1px solid var(--border);
+    }
+    .email-panel-body.open { display: block; }
+
+    /* SMTP config section */
+    .smtp-section {
+      margin-bottom: 1.1rem;
+      padding-bottom: 1.1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .smtp-section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin: 1rem 0 0.6rem;
+    }
+
+    .smtp-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .smtp-grid input, .smtp-full input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.55rem 0.85rem;
+      color: var(--text);
+      font-size: 0.83rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .smtp-full { margin-top: 0.5rem; }
+
+    .smtp-grid input:focus, .smtp-full input:focus { border-color: var(--accent); }
+
+    .smtp-save-btn {
+      margin-top: 0.65rem;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 0.5rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .smtp-save-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .smtp-status {
+      font-size: 0.78rem;
+      margin-top: 0.4rem;
+    }
+    .smtp-status.ok  { color: var(--green); }
+    .smtp-status.err { color: #f87171; }
+
+    /* Recipient list */
+    .recipient-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin: 1rem 0 0.6rem;
+    }
+
+    .add-email-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .add-email-row input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.55rem 0.85rem;
+      color: var(--text);
+      font-size: 0.83rem;
+      outline: none;
+      transition: border-color 0.2s;
+      min-width: 0;
+    }
+    .add-email-row input:focus { border-color: var(--accent); }
+
+    .add-email-btn {
+      background: linear-gradient(120deg, var(--accent), var(--accent2));
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      padding: 0.55rem 1rem;
+      font-size: 0.83rem;
+      font-weight: 700;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: opacity 0.15s;
+    }
+    .add-email-btn:hover { opacity: 0.88; }
+
+    .recipient-list {
+      list-style: none;
+      margin-top: 0.65rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .recipient-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface2);
+      border-radius: 7px;
+      padding: 0.45rem 0.75rem;
+      font-size: 0.83rem;
+      animation: pop-in 0.2s ease both;
+    }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0 0.2rem;
+      transition: color 0.15s;
+    }
+    .remove-btn:hover { color: #f87171; }
+
+    .no-recipients {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+    }
+
+    /* Send by email button */
+    .send-email-btn {
+      display: inline-block;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    .send-email-btn:hover:not(:disabled) { border-color: var(--accent2); color: var(--accent2); }
+    .send-email-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
     /* Download button */
     .download-btn {
@@ -364,7 +584,7 @@
 
 <header>
   <h1>NYC Concert Finder</h1>
-  <p>Paste any Spotify playlist — see upcoming New York City shows</p>
+  <p>Paste any Spotify playlist — find upcoming shows in New York City &amp; Prince Edward Island</p>
 </header>
 
 <main>
@@ -388,6 +608,49 @@
     </div>
   </div>
 
+  <!-- Email Recipients Panel -->
+  <div class="email-panel">
+    <div class="email-panel-header" onclick="toggleEmailPanel()">
+      <div class="email-panel-title">
+        ✉ Email Recipients
+        <span class="email-count-badge" id="email-count">0</span>
+      </div>
+      <span class="chevron" id="email-chevron">▼</span>
+    </div>
+    <div class="email-panel-body" id="email-panel-body">
+
+      <!-- SMTP Settings -->
+      <div class="smtp-section">
+        <div class="smtp-section-label">SMTP Settings (Gmail recommended)</div>
+        <div class="smtp-grid">
+          <input id="smtp-user" type="email" placeholder="your@gmail.com" />
+          <input id="smtp-pass" type="password" placeholder="App password" />
+        </div>
+        <div class="smtp-full">
+          <input id="smtp-host" type="text" placeholder="SMTP host (default: smtp.gmail.com)" />
+        </div>
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-top:0.5rem">
+          <button class="smtp-save-btn" onclick="saveSmtpConfig()">Save SMTP</button>
+          <span class="smtp-status" id="smtp-status"></span>
+        </div>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">
+          Gmail: enable 2FA → <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:var(--accent)">create an App Password</a> → paste it above.
+        </p>
+      </div>
+
+      <!-- Recipient list -->
+      <div class="recipient-label">Recipients</div>
+      <div class="add-email-row">
+        <input id="new-email-input" type="email" placeholder="name@example.com"
+               onkeydown="if(event.key==='Enter') addEmail()" />
+        <button class="add-email-btn" onclick="addEmail()">Add</button>
+      </div>
+      <ul class="recipient-list" id="recipient-list"></ul>
+      <p class="no-recipients" id="no-recipients-msg">No recipients yet — add one above.</p>
+
+    </div>
+  </div>
+
   <!-- Progress -->
   <div id="progress-section">
     <div class="status-line" id="status-text">Starting...</div>
@@ -399,6 +662,7 @@
   <div id="summary-row" style="display:none; align-items:center; margin-bottom:1.5rem; flex-wrap:wrap; gap:0.5rem;">
     <div id="summary" style="display:block; margin-bottom:0; flex:1; min-width:200px;"></div>
     <button class="download-btn" id="dl-btn" onclick="downloadTxt()">Save as TXT</button>
+    <button class="send-email-btn" id="email-btn" onclick="sendReport()" disabled>Send by Email</button>
   </div>
 
   <!-- Results -->
@@ -406,12 +670,128 @@
 
 </main>
 
-<footer>Concert data from Ticketmaster &bull; Artist data from Spotify</footer>
+<footer>New York City &amp; Prince Edward Island &bull; Concert data from Songkick &bull; Artist data from Spotify</footer>
 
 <script>
   let es = null;
-  let allResults = [];   // accumulates {artist, concerts[]} as they stream in
-  let playlistLabel = 'NYC Concerts';
+  let allResults = [];
+  let playlistLabel = 'Concert Report';
+
+  // ── Email panel ──────────────────────────────────────
+  function toggleEmailPanel() {
+    const body    = document.getElementById('email-panel-body');
+    const chevron = document.getElementById('email-chevron');
+    body.classList.toggle('open');
+    chevron.classList.toggle('open');
+  }
+
+  function renderRecipients(emails) {
+    const list   = document.getElementById('recipient-list');
+    const empty  = document.getElementById('no-recipients-msg');
+    const badge  = document.getElementById('email-count');
+    badge.textContent = emails.length;
+    list.innerHTML = '';
+    empty.style.display = emails.length ? 'none' : 'block';
+    emails.forEach(email => {
+      const li = document.createElement('li');
+      li.className = 'recipient-item';
+      li.innerHTML = '<span>' + esc(email) + '</span>'
+        + '<button class="remove-btn" onclick="removeEmail(\'' + esc(email) + '\')" title="Remove">✕</button>';
+      list.appendChild(li);
+    });
+    // Enable/disable Send button based on recipients + results
+    refreshEmailBtn();
+  }
+
+  function refreshEmailBtn() {
+    const badge = document.getElementById('email-count');
+    const count = parseInt(badge.textContent, 10) || 0;
+    const btn   = document.getElementById('email-btn');
+    btn.disabled = !(count > 0 && allResults.length > 0);
+  }
+
+  async function loadRecipients() {
+    const res    = await fetch('/api/emails');
+    const emails = await res.json();
+    renderRecipients(emails);
+  }
+
+  async function addEmail() {
+    const input = document.getElementById('new-email-input');
+    const email = input.value.trim();
+    if (!email) return;
+    const res = await fetch('/api/emails', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email})
+    });
+    const emails = await res.json();
+    input.value = '';
+    renderRecipients(emails);
+  }
+
+  async function removeEmail(email) {
+    const res    = await fetch('/api/emails/' + encodeURIComponent(email), {method: 'DELETE'});
+    const emails = await res.json();
+    renderRecipients(emails);
+  }
+
+  async function loadSmtpConfig() {
+    const res = await fetch('/api/mail-config');
+    const cfg = await res.json();
+    document.getElementById('smtp-user').value = cfg.smtp_user || '';
+    document.getElementById('smtp-host').value = cfg.smtp_host !== 'smtp.gmail.com' ? cfg.smtp_host : '';
+    const status = document.getElementById('smtp-status');
+    status.textContent  = cfg.configured ? '✓ SMTP configured' : 'Not configured yet';
+    status.className    = 'smtp-status ' + (cfg.configured ? 'ok' : 'err');
+  }
+
+  async function saveSmtpConfig() {
+    const user  = document.getElementById('smtp-user').value.trim();
+    const pass  = document.getElementById('smtp-pass').value.trim();
+    const host  = document.getElementById('smtp-host').value.trim() || 'smtp.gmail.com';
+    if (!user) { alert('Enter your email address'); return; }
+    if (!pass) { alert('Enter your app password'); return; }
+    await fetch('/api/mail-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({smtp_user: user, smtp_pass: pass, smtp_host: host})
+    });
+    document.getElementById('smtp-pass').value = '';
+    await loadSmtpConfig();
+  }
+
+  async function sendReport() {
+    const btn = document.getElementById('email-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    try {
+      const res  = await fetch('/api/send-report', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({results: allResults, playlist_name: playlistLabel})
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert('Error: ' + data.error);
+      } else {
+        const ok  = data.sent.length;
+        const bad = data.errors.length;
+        alert('✓ Sent to ' + ok + ' recipient' + (ok !== 1 ? 's' : '')
+          + (bad ? '\n⚠ Failed: ' + data.errors.map(e => e.email).join(', ') : ''));
+      }
+    } catch(e) {
+      alert('Send failed: ' + e.message);
+    }
+    btn.textContent = 'Send by Email';
+    refreshEmailBtn();
+  }
+
+  // Load on page start
+  window.addEventListener('DOMContentLoaded', () => {
+    loadRecipients();
+    loadSmtpConfig();
+  });
 
   function startSearch() {
     const url = document.getElementById('playlist-url').value.trim();
@@ -475,6 +855,7 @@
       const s   = document.getElementById('summary');
       row.style.display = 'flex';
       document.getElementById('dl-btn').style.display = d.artists_with_shows > 0 ? '' : 'none';
+      refreshEmailBtn();
 
       if (d.artists_with_shows > 0) {
         s.innerHTML = 'Found <strong>' + d.artists_with_shows + '</strong> artist'
@@ -519,17 +900,18 @@
 
   function appendCard(data) {
     const rows = data.concerts.map(c => {
-      const addr = c.address ? c.address + ', New York, NY' : 'New York, NY';
-      const time = c.time ? ' &bull; ' + esc(c.time) : '';
+      const time  = c.time ? ' &bull; ' + esc(c.time) : '';
       const price = c.price
         ? '<span class="price-chip">' + esc(c.price) + '</span>' : '';
+      const cityBadge = c.city
+        ? '<span class="city-badge">' + esc(c.city) + '</span>' : '';
 
       return '<li class="concert-row">'
         + '<div class="concert-info">'
-        +   '<div class="concert-title">' + esc(c.event_name || '') + '</div>'
+        +   '<div class="concert-title">' + esc(c.event_name || '') + ' ' + cityBadge + '</div>'
         +   '<div class="concert-meta">'
         +     '<span>&#128197; ' + esc(c.date || '') + time + '</span>'
-        +     '<span>&#128205; ' + esc(c.venue || '') + ' &mdash; ' + esc(addr) + '</span>'
+        +     '<span>&#128205; ' + esc(c.venue || '') + '</span>'
         +     (price ? '<span>' + price + '</span>' : '')
         +   '</div>'
         + '</div>'

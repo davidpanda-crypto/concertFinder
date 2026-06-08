@@ -6,3 +6,5 @@ __pycache__/
 /tmp/
 *.log
 run_app.sh
+emails.json
+mail_config.json
