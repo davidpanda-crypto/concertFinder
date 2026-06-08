@@ -169,16 +169,49 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Songkick scraper — multi-city concert search
+# City definitions
 # ---------------------------------------------------------------------------
 
-# Cities we watch — keywords matched against the Songkick location string
+# Songkick: keyword match on the free-text location string
 WATCH_CITIES = [
-    {"label": "New York City",       "keywords": ["new york", "brooklyn", "bronx", "queens", "staten island", "nyc"]},
-    {"label": "Prince Edward Island","keywords": ["charlottetown", "prince edward island", "pei"]},
-    {"label": "Washington DC",       "keywords": ["washington", "washington dc", "arlington", "alexandria"]},
+    {"label": "New York City",        "keywords": ["new york", "brooklyn", "bronx", "queens", "staten island", "nyc"]},
+    {"label": "Prince Edward Island", "keywords": ["charlottetown", "prince edward island", "pei"]},
+    {"label": "Washington DC",        "keywords": ["washington", "washington dc", "arlington", "alexandria"]},
 ]
 
+# Ticketmaster: structured city/state match (much more accurate)
+TM_CITY_RULES = [
+    {
+        "label": "New York City",
+        "cities": {"new york", "new york city", "brooklyn", "bronx", "queens", "staten island"},
+        "states": {"ny"},
+        "countries": {"us"},
+    },
+    {
+        "label": "Prince Edward Island",
+        "cities": {"charlottetown"},
+        "states": {"pe", "pei", "prince edward island"},
+        "countries": {"ca"},
+    },
+    {
+        "label": "Washington DC",
+        "cities": {"washington", "washington dc"},
+        "states": {"dc"},
+        "countries": {"us"},
+    },
+    # Include nearby DC suburbs (same metro area)
+    {
+        "label": "Washington DC",
+        "cities": {"arlington", "alexandria", "silver spring", "bethesda", "rockville", "national harbor"},
+        "states": {"va", "md"},
+        "countries": {"us"},
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _soup(url: str) -> BeautifulSoup:
     resp = requests.get(url, headers=BROWSER_HEADERS, timeout=12)
@@ -186,34 +219,19 @@ def _soup(url: str) -> BeautifulSoup:
     return BeautifulSoup(resp.text, "html.parser")
 
 
-def _city_label(location_text: str) -> Optional[str]:
-    """Return the city label if the location matches any watched city, else None."""
-    text = location_text.lower()
-    for city in WATCH_CITIES:
-        if any(k in text for k in city["keywords"]):
-            return city["label"]
-    return None
-
-
 def _clean_name(name: str) -> str:
-    """Strip featuring credits, punctuation noise, and normalise for search."""
-    # Remove feat./ft. suffixes:  "Artist feat. Other" → "Artist"
     name = re.sub(r'\s*(feat\.?|ft\.?|featuring)\s+.*', '', name, flags=re.I)
-    # Remove parenthetical suffixes: "Artist (Official)" → "Artist"
     name = re.sub(r'\s*\(.*?\)', '', name)
-    # Collapse extra whitespace
     return name.strip()
 
 
 def _name_variants(name: str) -> list:
-    """Return a list of search queries to try, most specific first."""
     cleaned = _clean_name(name)
     variants = [name]
     if cleaned != name:
         variants.append(cleaned)
-    # If name has & or and, try just the first part
     for sep in [" & ", " and "]:
-        if sep in name.lower():
+        if sep.lower() in name.lower():
             first = re.split(sep, name, maxsplit=1, flags=re.I)[0].strip()
             if first not in variants:
                 variants.append(first)
@@ -221,132 +239,135 @@ def _name_variants(name: str) -> list:
 
 
 def _name_matches(result_text: str, artist_name: str) -> bool:
-    """Check whether a Songkick result name is a plausible match."""
     result = result_text.lower().strip()
     target = _clean_name(artist_name).lower().strip()
-    # Exact or near-exact match
     if target in result or result in target:
         return True
-    # At least half the significant words match
     words = [w for w in target.split() if len(w) > 2]
     if not words:
         return True
-    matches = sum(1 for w in words if w in result)
-    return matches / len(words) >= 0.5
+    return sum(1 for w in words if w in result) / len(words) >= 0.5
 
 
-def _songkick_artist_path(artist_name: str) -> Optional[str]:
+def _fmt_dt(iso: str):
+    """Return (date_display, time_display) from an ISO datetime string."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%A, %B %-d, %Y"), dt.strftime("%-I:%M %p")
+    except Exception:
+        return iso, ""
+
+
+# ---------------------------------------------------------------------------
+# Concert source — Last.fm  (server-rendered, schema.org, no credentials)
+# ---------------------------------------------------------------------------
+
+def _lastfm_city_label(address: str) -> Optional[str]:
     """
-    Search Songkick for the artist.
-    Search results live in <li class="artist"> items; the name is in the
-    nested <p class="summary"> — NOT in the <a> element itself.
+    Last.fm address format: "City, State, Country"  or  "City, Country"
+    Match against our watched cities using keywords.
     """
-    for variant in _name_variants(artist_name):
-        query = urllib.parse.quote_plus(variant)
-        try:
-            soup = _soup(
-                f"https://www.songkick.com/search?utf8=%E2%9C%93&query={query}&type=artists"
-            )
-        except Exception:
-            continue
-
-        # Songkick search results: <li class="artist"> … <p class="summary">Name</p>
-        for li in soup.find_all("li", class_="artist"):
-            # Get the artist link (href contains /artists/NNN-slug)
-            a = li.find("a", href=re.compile(r"/artists/\d+"))
-            if not a:
-                continue
-            href = a.get("href", "").split("?")[0]
-
-            # Get the displayed name from the summary paragraph
-            summary = li.find("p", class_="summary")
-            displayed = summary.get_text(strip=True) if summary else a.get_text(strip=True)
-
-            if _name_matches(displayed, artist_name):
-                return href
-
+    text = address.lower()
+    for city in WATCH_CITIES:
+        if any(k in text for k in city["keywords"]):
+            return city["label"]
     return None
 
 
-def _parse_events(artist_path: str) -> list:
-    """Scrape the artist's Songkick calendar; return events in any watched city."""
-    try:
-        soup = _soup(f"https://www.songkick.com{artist_path}/calendar")
-    except Exception:
-        return []
+def _lastfm_artist_slug(artist_name: str) -> list:
+    """Return a list of URL slugs to try for this artist on Last.fm."""
+    slugs = []
+    for variant in _name_variants(artist_name):
+        # Last.fm encodes spaces as + and & as %26 in artist URLs
+        encoded = urllib.parse.quote(variant, safe="")
+        slugs.append(encoded)
+    return slugs
 
+
+def _lastfm_events(artist_name: str) -> list:
+    """
+    Fetch upcoming events for an artist from Last.fm.
+    Returns concerts in any watched city.
+    """
     events = []
 
-    for li in soup.select(
-        "li.event-listing, "
-        "li[class*='event-listing'], "
-        "li.concert, "
-        "li[class*='concert']"
-    ):
-        # ── Location ────────────────────────────────────────────────
-        loc_el = li.select_one(
-            ".location, .venue-location, [class*='location'], "
-            ".summary .location, em.location"
-        )
-        location_text = loc_el.get_text(" ", strip=True) if loc_el else ""
-        city = _city_label(location_text)
-        if not city:
+    for slug in _lastfm_artist_slug(artist_name):
+        url = f"https://www.last.fm/music/{slug}/+events"
+        try:
+            resp = requests.get(url, headers=BROWSER_HEADERS, timeout=12)
+            if resp.status_code != 200:
+                continue
+        except Exception:
             continue
 
-        # ── Event name ───────────────────────────────────────────────
-        name_el = (
-            li.select_one(".event-description strong")
-            or li.select_one(".summary strong")
-            or li.select_one("h3 a")
-            or li.select_one("a[href*='/concerts/']")
-            or li.select_one("a[href*='/events/']")
-        )
-        event_name = name_el.get_text(strip=True) if name_el else ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        rows = soup.select("tr.events-list-item[itemprop='event']")
+        if not rows:
+            continue   # no events on this page — try next slug variant
 
-        # ── Date & time ──────────────────────────────────────────────
-        time_el  = li.select_one("time")
-        date_raw = time_el.get("datetime", "") if time_el else ""
-        date_display = time_display = ""
-        if date_raw:
-            try:
-                dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-                date_display = dt.strftime("%A, %B %-d, %Y")
-                time_display = dt.strftime("%-I:%M %p")
-            except Exception:
-                date_display = date_raw
+        for row in rows:
+            # ── Address / city ───────────────────────────────────────
+            addr_el = row.select_one(".events-list-item-venue--address")
+            address = addr_el.get_text(strip=True) if addr_el else ""
+            city    = _lastfm_city_label(address)
+            if not city:
+                continue
 
-        # ── Venue ────────────────────────────────────────────────────
-        venue_el = li.select_one(
-            ".venue-name, strong.venue, "
-            "[class*='venue-name'], .summary .venue"
-        )
-        venue = venue_el.get_text(strip=True) if venue_el else ""
+            # ── Date ────────────────────────────────────────────────
+            time_el  = row.select_one("time[datetime]")
+            date_raw = time_el.get("datetime", "") if time_el else ""
+            date_display, time_display = _fmt_dt(date_raw) if date_raw else ("TBA", "")
 
-        # ── Ticket URL ───────────────────────────────────────────────
-        link_el    = name_el or li.select_one("a[href]")
-        raw_href   = (link_el.get("href", "") if link_el else "")
-        ticket_url = ("https://www.songkick.com" + raw_href) if raw_href.startswith("/") else raw_href
+            # ── Event name ───────────────────────────────────────────
+            name_el    = row.select_one("[itemprop='name']")
+            event_name = name_el.get_text(strip=True) if name_el else artist_name
 
-        events.append({
-            "event_name":  event_name or city,
-            "date":        date_display or "TBA",
-            "date_raw":    date_raw,
-            "time":        time_display,
-            "venue":       venue or city,
-            "city":        city,
-            "tickets_url": ticket_url,
-        })
+            # ── Venue ────────────────────────────────────────────────
+            venue_el = row.select_one(".events-list-item-venue--title")
+            venue    = venue_el.get_text(strip=True) if venue_el else ""
+
+            # ── Last.fm event URL ────────────────────────────────────
+            link_el    = row.select_one("a.events-list-item-event-name")
+            raw_href   = link_el.get("href", "") if link_el else ""
+            ticket_url = ("https://www.last.fm" + raw_href) if raw_href.startswith("/") else raw_href
+
+            events.append({
+                "event_name":  event_name,
+                "date":        date_display,
+                "date_raw":    date_raw,
+                "time":        time_display,
+                "venue":       venue or city,
+                "address":     address,
+                "city":        city,
+                "tickets_url": ticket_url,
+                "source":      "Last.fm",
+            })
+
+        break   # found events with this slug — no need to try others
 
     return events
 
 
-def find_concerts(artist_name: str) -> list:
-    """Find upcoming shows for one artist across all watched cities."""
-    try:
-        path = _songkick_artist_path(artist_name)
-        return _parse_events(path) if path else []
-    except Exception:
-        return []
+# ---------------------------------------------------------------------------
+# Dedup + combine
+# ---------------------------------------------------------------------------
+
+def _dedup(events: list) -> list:
+    seen, out = set(), []
+    for e in events:
+        key = (e.get("date_raw", "")[:10], re.sub(r'\W', '', e.get("venue", "").lower())[:15])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
+def find_concerts(artist_name: str, tm_driver=None) -> list:
+    """Find upcoming shows on Last.fm; return sorted by date."""
+    events = _lastfm_events(artist_name)
+    events = _dedup(events)
+    events.sort(key=lambda e: e.get("date_raw", ""))
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +386,7 @@ def concerts_stream():
     def generate():
         try:
             # Step 1 — scrape Spotify with headless Chrome
-            yield sse("status", {"message": "Opening Spotify playlist in headless browser..."})
+            yield sse("status", {"message": "Reading playlist from Spotify..."})
             try:
                 playlist_name, playlist_image, artists_map = scrape_spotify_playlist(playlist_url)
             except Exception as e:
@@ -373,11 +394,12 @@ def concerts_stream():
                 return
 
             yield sse("playlist_info", {"name": playlist_name, "image": playlist_image})
-
             artists = sorted(artists_map)
             yield sse("artists_found", {"count": len(artists)})
 
-            # Step 2 — search Songkick for NYC concerts per artist
+            yield sse("status", {"message": f"Searching {len(artists)} artists on Last.fm..."})
+
+            # Step 2 — search Last.fm for each artist
             found_count = 0
             for i, artist in enumerate(artists):
                 yield sse("progress", {
@@ -393,7 +415,7 @@ def concerts_stream():
                         "spotify_url": artists_map.get(artist, ""),
                         "concerts":    concerts,
                     })
-                time.sleep(0.4)
+                time.sleep(0.3)
 
             yield sse("done", {
                 "total_artists":      len(artists),

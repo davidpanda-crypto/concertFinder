@@ -670,7 +670,7 @@
 
 </main>
 
-<footer>New York City &bull; Prince Edward Island &bull; Washington DC &bull; Concert data from Songkick &bull; Artist data from Spotify</footer>
+<footer>New York City &bull; Prince Edward Island &bull; Washington DC &bull; Concert data from Last.fm &bull; Artist data from Spotify</footer>
 
 <script>
   let es = null;
@@ -906,12 +906,18 @@
       const cityBadge = c.city
         ? '<span class="city-badge">' + esc(c.city) + '</span>' : '';
 
+      const srcBadge = c.source
+        ? '<span style="font-size:0.65rem;color:var(--muted);background:var(--surface2);padding:0.1rem 0.4rem;border-radius:3px;margin-left:4px;vertical-align:middle">'
+          + esc(c.source) + '</span>'
+        : '';
+      const addrLine = c.address ? ' &mdash; ' + esc(c.address) : '';
+
       return '<li class="concert-row">'
         + '<div class="concert-info">'
-        +   '<div class="concert-title">' + esc(c.event_name || '') + ' ' + cityBadge + '</div>'
+        +   '<div class="concert-title">' + esc(c.event_name || '') + ' ' + cityBadge + srcBadge + '</div>'
         +   '<div class="concert-meta">'
         +     '<span>&#128197; ' + esc(c.date || '') + time + '</span>'
-        +     '<span>&#128205; ' + esc(c.venue || '') + '</span>'
+        +     '<span>&#128205; ' + esc(c.venue || '') + addrLine + '</span>'
         +     (price ? '<span>' + price + '</span>' : '')
         +   '</div>'
         + '</div>'
