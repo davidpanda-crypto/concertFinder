@@ -126,14 +126,11 @@ def _harvest_artists(driver) -> dict:
 def scrape_spotify_playlist(playlist_url: str) -> tuple:
     """
     Return (playlist_name, cover_image_url, {artist_name: spotify_url}).
-    Scrolls 600 px at a time until the artist list stabilises for 4 rounds,
-    ensuring all lazy-loaded tracks are captured.
+    Scrolls until the artist list is stable, capturing all lazy-loaded tracks.
     """
     driver = _make_driver(headless=True)
     try:
         driver.get(playlist_url)
-
-        # Wait up to 25 s for the first artist link
         try:
             WebDriverWait(driver, 25).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
@@ -141,29 +138,11 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
         except Exception:
             pass
 
-        # Scroll and harvest until stable
-        all_artists: dict = {}
-        last_count = stable_rounds = 0
+        artists = _scroll_and_harvest(driver, max_scrolls=80)
 
-        for _ in range(80):
-            all_artists.update(_harvest_artists(driver))
-            if len(all_artists) == last_count:
-                stable_rounds += 1
-                if stable_rounds >= 4:
-                    break
-            else:
-                stable_rounds = 0
-                last_count = len(all_artists)
-            driver.execute_script("window.scrollBy(0, 600)")
-            time.sleep(0.7)
-
-        all_artists.update(_harvest_artists(driver))  # final sweep
-
-        # Playlist name
         title = driver.title
-        name = title.split(" - playlist")[0].strip() if " - playlist" in title else title
+        name  = title.split(" - playlist")[0].strip() if " - playlist" in title else title
 
-        # Cover image
         image = ""
         for sel in ("img[data-testid='playlist-image']", ".cover-art img", "img[src*='mosaic']"):
             try:
@@ -173,7 +152,7 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
             except Exception:
                 pass
 
-        return name, image, all_artists
+        return name, image, artists
 
     finally:
         driver.quit()
@@ -422,24 +401,7 @@ def liked_songs_stream():
             except Exception:
                 pass
 
-            # Scroll through the full library
-            artists_map: dict = {}
-            last_count = stable_rounds = 0
-
-            for _ in range(300):
-                artists_map.update(_harvest_artists(driver))
-                if len(artists_map) == last_count:
-                    stable_rounds += 1
-                    if stable_rounds >= 4:
-                        break
-                else:
-                    stable_rounds = 0
-                    last_count = len(artists_map)
-                    yield sse("status", {"message": f"Reading Liked Songs… {len(artists_map)} artists found"})
-                driver.execute_script("window.scrollBy(0, 600)")
-                time.sleep(0.7)
-
-            artists_map.update(_harvest_artists(driver))
+            artists_map = _scroll_and_harvest(driver, max_scrolls=300)
             driver.quit()
             driver = None
 
