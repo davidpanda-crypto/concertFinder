@@ -14,7 +14,9 @@ Run:
 Then open http://localhost:5001
 """
 
+import html
 import json
+import os
 import re
 import smtplib
 import time
@@ -24,6 +26,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -39,6 +42,27 @@ from selenium.webdriver.support.ui import WebDriverWait
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+
+# Limit request body to 1 MB — prevents memory-exhaustion via large POSTs
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
+
+
+@app.after_request
+def add_security_headers(resp):
+    """Attach security headers to every response."""
+    resp.headers["X-Content-Type-Options"]    = "nosniff"
+    resp.headers["X-Frame-Options"]           = "DENY"
+    resp.headers["X-XSS-Protection"]          = "1; mode=block"
+    resp.headers["Referrer-Policy"]           = "no-referrer"
+    resp.headers["Content-Security-Policy"]   = (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'"
+    )
+    return resp
+
 
 DEFAULT_PLAYLIST = "https://open.spotify.com/playlist/3eyYxErnxrMTDE6m8zy57w"
 
@@ -574,6 +598,15 @@ def _save_mail_cfg(cfg: dict):
     MAIL_CFG_FILE.write_text(json.dumps(cfg, indent=2))
 
 
+def _smtp_password(cfg: dict) -> str:
+    """
+    Return the SMTP password.
+    Prefers the SMTP_PASS environment variable over the stored file value
+    so the password can be kept out of the filesystem entirely.
+    """
+    return os.environ.get("SMTP_PASS") or cfg.get("smtp_pass", "")
+
+
 @app.route("/api/mail-config", methods=["GET"])
 def get_mail_cfg():
     cfg = _load_mail_cfg()
@@ -582,7 +615,8 @@ def get_mail_cfg():
         "smtp_port":  cfg.get("smtp_port", 587),
         "smtp_user":  cfg.get("smtp_user", ""),
         "from_name":  cfg.get("from_name", "Concert Finder"),
-        "configured": bool(cfg.get("smtp_user") and cfg.get("smtp_pass")),
+        # Never return the password — just signal whether one is set
+        "configured": bool(cfg.get("smtp_user") and _smtp_password(cfg)),
     })
 
 
@@ -591,10 +625,10 @@ def save_mail_cfg():
     data = request.json or {}
     cfg  = _load_mail_cfg()
     for key in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "from_name"):
-        if key in data and data[key] != "":
+        if key in data and str(data[key]).strip():
             cfg[key] = data[key]
     _save_mail_cfg(cfg)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "env_override": bool(os.environ.get("SMTP_PASS"))})
 
 
 # ---------------------------------------------------------------------------
@@ -610,27 +644,38 @@ def _build_email_html(results: list, playlist_name: str) -> str:
         key=lambda x: x.get("date_raw", ""),
     )
 
-    rows = "".join(f"""
-        <tr style="border-bottom:1px solid #f0f0f0">
-          <td style="padding:10px 12px;font-weight:600">{c['artist']}</td>
-          <td style="padding:10px 12px">{c.get('date','TBA')}{' &bull; ' + c['time'] if c.get('time') else ''}</td>
-          <td style="padding:10px 12px">{c.get('venue','')}</td>
-          <td style="padding:10px 12px">
-            <span style="background:#a855f722;color:#a855f7;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:700">{c.get('city','')}</span>
-          </td>
-          <td style="padding:10px 12px">
-            <a href="{c.get('tickets_url','#')}" style="background:linear-gradient(120deg,#a855f7,#ec4899);color:#fff;padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">Tickets</a>
-          </td>
-        </tr>""" for c in flat)
+    def row(c: dict) -> str:
+        artist  = html.escape(c.get("artist", ""))
+        date    = html.escape(c.get("date", "TBA"))
+        time_s  = (" &bull; " + html.escape(c["time"])) if c.get("time") else ""
+        venue   = html.escape(c.get("venue", ""))
+        city    = html.escape(c.get("city", ""))
+        tix_url = _safe_url(c.get("tickets_url", ""))
+        return (
+            '<tr style="border-bottom:1px solid #f0f0f0">'
+            f'<td style="padding:10px 12px;font-weight:600">{artist}</td>'
+            f'<td style="padding:10px 12px">{date}{time_s}</td>'
+            f'<td style="padding:10px 12px">{venue}</td>'
+            f'<td style="padding:10px 12px">'
+            f'<span style="background:#a855f722;color:#a855f7;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:700">{city}</span>'
+            f'</td>'
+            f'<td style="padding:10px 12px">'
+            f'<a href="{tix_url}" style="background:linear-gradient(120deg,#a855f7,#ec4899);color:#fff;padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">Tickets</a>'
+            f'</td>'
+            '</tr>'
+        )
 
-    shows  = len(flat)
-    artists = len(results)
+    rows = "".join(row(c) for c in flat)
+
+    shows        = len(flat)
+    artists      = len(results)
+    safe_pl_name = html.escape(playlist_name)
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
 <div style="max-width:700px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
   <div style="background:linear-gradient(120deg,#a855f7,#ec4899);padding:28px 32px">
     <h1 style="margin:0;color:#fff;font-size:22px;font-weight:800">Concert Report</h1>
-    <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:14px">{playlist_name} &bull; {cities} &bull; {date}</p>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:14px">{safe_pl_name} &bull; {cities} &bull; {date}</p>
   </div>
   <div style="padding:24px 32px">
     <p style="color:#555;font-size:14px;margin:0 0 20px">
@@ -655,6 +700,21 @@ def _build_email_html(results: list, playlist_name: str) -> str:
   </div>
 </div>
 </body></html>"""
+
+
+def _safe_url(url: str) -> str:
+    """
+    Return the URL only if it uses http or https.
+    Blocks javascript:, data:, and any other scheme that could execute in
+    an email client or browser when clicked.
+    """
+    try:
+        scheme = urlparse(url).scheme.lower()
+        if scheme in ("http", "https"):
+            return html.escape(url, quote=True)
+    except Exception:
+        pass
+    return "#"
 
 
 def _build_sms_text(results: list, playlist_name: str) -> str:
@@ -691,8 +751,9 @@ def send_report():
     if not emails and not phones:
         return jsonify({"error": "No email or phone recipients configured"}), 400
 
-    cfg = _load_mail_cfg()
-    if not cfg.get("smtp_user") or not cfg.get("smtp_pass"):
+    cfg  = _load_mail_cfg()
+    smtp_pass = _smtp_password(cfg)
+    if not cfg.get("smtp_user") or not smtp_pass:
         return jsonify({"error": "SMTP not configured — open Email Settings and save your credentials"}), 400
 
     if not results:
@@ -707,7 +768,7 @@ def send_report():
     try:
         server = smtplib.SMTP(cfg.get("smtp_host", "smtp.gmail.com"), int(cfg.get("smtp_port", 587)))
         server.starttls()
-        server.login(cfg["smtp_user"], cfg["smtp_pass"])
+        server.login(cfg["smtp_user"], smtp_pass)
 
         # ── Email recipients ────────────────────────────────────
         for to_addr in emails:
@@ -744,4 +805,5 @@ def send_report():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, port=5001)
