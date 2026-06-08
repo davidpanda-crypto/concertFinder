@@ -141,6 +141,7 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
 WATCH_CITIES = [
     {"label": "New York City",       "keywords": ["new york", "brooklyn", "bronx", "queens", "staten island", "nyc"]},
     {"label": "Prince Edward Island","keywords": ["charlottetown", "prince edward island", "pei"]},
+    {"label": "Washington DC",       "keywords": ["washington", "washington dc", "arlington", "alexandria"]},
 ]
 
 
