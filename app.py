@@ -174,6 +174,7 @@ def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> w
         opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
     if profile_dir:
         opts.add_argument(f"--user-data-dir={profile_dir}")
     opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -858,4 +859,5 @@ def send_report():
 
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, port=5001)
+    port  = int(os.environ.get("PORT", 5001))
+    app.run(debug=debug, host="0.0.0.0", port=port)
