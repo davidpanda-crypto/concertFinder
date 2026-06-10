@@ -23,7 +23,7 @@ import re
 import smtplib
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -1044,6 +1044,29 @@ def _flatten_results(results: list) -> list:
     return sorted(flat, key=lambda x: x.get("date_raw", ""))
 
 
+def _week_start(d: datetime) -> datetime:
+    """Return the Monday (midnight) of the week containing `d`."""
+    d = d.replace(hour=0, minute=0, second=0, microsecond=0)
+    return d - timedelta(days=d.weekday())
+
+
+def _format_week_heading(d: datetime) -> str:
+    """Mirror the frontend's weekly headings: THIS WEEK / NEXT WEEK / WEEK OF ..."""
+    start = _week_start(d)
+    end = start + timedelta(days=6)
+    today_start = _week_start(datetime.now())
+    diff_weeks = (start - today_start).days // 7
+
+    rng = f"{start.strftime('%b %-d').upper()} - {end.strftime('%b %-d').upper()}"
+    year_suffix = f", {end.year}" if end.year != datetime.now().year else ""
+
+    if diff_weeks == 0:
+        return f"THIS WEEK · {rng}{year_suffix}"
+    if diff_weeks == 1:
+        return f"NEXT WEEK · {rng}{year_suffix}"
+    return f"WEEK OF {rng}{year_suffix}"
+
+
 def _build_email_html(flat: list, playlist_name: str) -> str:
     """Build a styled HTML email from a pre-flattened, sorted concert list."""
     cities       = " &amp; ".join(c["label"] for c in WATCH_CITIES)
@@ -1071,7 +1094,31 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
             '</tr>'
         )
 
-    rows_html = "".join(row(c) for c in flat)
+    def week_heading_row(c: dict) -> str:
+        try:
+            heading = _format_week_heading(datetime.fromisoformat(c["date_raw"].replace("Z", "+00:00")))
+        except Exception:
+            heading = "DATE TBA"
+        return (
+            '<tr><td colspan="5" style="padding:16px 12px 6px;font-size:12px;'
+            f'font-weight:800;letter-spacing:0.04em;color:#a855f7">{html.escape(heading)}</td></tr>'
+        )
+
+    rows_html_parts: list = []
+    last_group = None
+    for c in flat:
+        group_key = c["date_raw"][:10] if c.get("date_raw") else "tba"
+        # Re-bucket by week-start so any day within the same Mon-Sun week shares a heading.
+        if group_key != "tba":
+            try:
+                group_key = _week_start(datetime.fromisoformat(c["date_raw"].replace("Z", "+00:00"))).isoformat()
+            except Exception:
+                group_key = "tba"
+        if group_key != last_group:
+            last_group = group_key
+            rows_html_parts.append(week_heading_row(c))
+        rows_html_parts.append(row(c))
+    rows_html = "".join(rows_html_parts)
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
 <div style="max-width:700px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08)">
@@ -1105,8 +1152,12 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
 
 
 def _build_sms_text(flat: list, playlist_name: str) -> str:
-    """Compact plain-text for SMS — capped at MAX_SMS_SHOWS entries."""
-    lines = [f"Concert Alert — {playlist_name}", ""]
+    """
+    Compact plain-text for SMS — capped at MAX_SMS_SHOWS entries.
+    Sticks to plain ASCII (no em-dash/middle-dot) since some carrier
+    email-to-SMS gateways mangle non-ASCII characters.
+    """
+    lines = [f"Concert Alert - {playlist_name}", ""]
     for c in flat[:MAX_SMS_SHOWS]:
         try:
             dt       = datetime.fromisoformat(c["date_raw"].replace("Z", "+00:00"))
@@ -1115,7 +1166,7 @@ def _build_sms_text(flat: list, playlist_name: str) -> str:
             show_date = c.get("date", "TBA").split(",")[0]
         venue_short = c.get("venue", c.get("city", ""))[:30]
         lines.append(c["artist"])
-        lines.append(f"  {show_date} · {venue_short}, {c.get('city', '')}")
+        lines.append(f"  {show_date} - {venue_short}, {c.get('city', '')}")
     if len(flat) > MAX_SMS_SHOWS:
         lines.append(f"...and {len(flat) - MAX_SMS_SHOWS} more")
     return "\n".join(lines)
@@ -1189,7 +1240,11 @@ def send_report():
                 log.warning("Failed to send SMS to %s: %s", sms_addr, exc)
                 errors.append({"to": sms_addr, "error": str(exc)})
 
-    except smtplib.SMTPException as exc:
+    except (smtplib.SMTPException, OSError) as exc:
+        # Connection-level failures (bad host, refused connection, DNS
+        # failure, TLS errors) raise OSError subclasses, not SMTPException —
+        # catch both so the user always gets a JSON error instead of a
+        # raw 500 page.
         log.error("SMTP connection failed: %s", exc)
         return jsonify({"error": f"SMTP connection failed: {exc}"}), 500
     finally:
