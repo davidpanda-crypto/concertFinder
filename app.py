@@ -216,11 +216,19 @@ def _harvest_artists(driver) -> dict:
     scope = driver
     for sel in _TRACKLIST_CONTAINER_SELECTORS:
         try:
-            container = driver.find_element(By.CSS_SELECTOR, sel)
+            candidates = driver.find_elements(By.CSS_SELECTOR, sel)
         except Exception:
-            container = None
-        if container:
-            scope = container
+            candidates = []
+        # A page can have several elements matching a generic selector (e.g.
+        # "[role='grid']" also matches recommendation grids). Only scope to
+        # one that actually contains artist links — otherwise an empty/wrong
+        # match would silently zero out the whole harvest.
+        match = next(
+            (c for c in candidates if c.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']")),
+            None,
+        )
+        if match:
+            scope = match
             break
 
     for selector in _ARTIST_SELECTORS:
