@@ -207,47 +207,83 @@ return el.scrollHeight;
 """
 
 
-def _scroll_and_harvest(driver, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
+def _scroll_and_harvest(driver, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
     """
-    Scroll the list in SCROLL_PX steps, harvesting artist links after each step.
-    Stops once both the artist count AND the scroll height are stable for
+    Scroll the list in SCROLL_PX steps, harvesting items via harvest_fn after each step.
+    Stops once both the item count AND the scroll height are stable for
     STABLE_ROUNDS consecutive rounds — checking scroll height too avoids
     quitting early during a brief lazy-load pause on large libraries.
     """
-    all_artists: dict = {}
+    all_items: dict = {}
     last_count = last_height = stable_rounds = 0
 
     for _ in range(max_scrolls):
-        all_artists.update(_harvest_artists(driver))
+        all_items.update(harvest_fn(driver))
         height = driver.execute_script(_SCROLL_JS, SCROLL_PX)
 
-        if len(all_artists) == last_count and height == last_height:
+        if len(all_items) == last_count and height == last_height:
             stable_rounds += 1
             if stable_rounds >= STABLE_ROUNDS:
                 break
         else:
             stable_rounds = 0
-            last_count  = len(all_artists)
+            last_count  = len(all_items)
             last_height = height
 
         time.sleep(SCROLL_DELAY_S)
 
-    all_artists.update(_harvest_artists(driver))  # final sweep after scroll settles
-    return all_artists
+    all_items.update(harvest_fn(driver))  # final sweep after scroll settles
+    return all_items
+
+
+# Spotify injects playlist links inside the library/collection list
+_PLAYLIST_SELECTORS = [
+    "[data-testid='playlist-row'] a[href*='/playlist/']",
+    "div[role='row'] a[href*='/playlist/']",
+    "a[href*='/playlist/']",
+]
+
+
+def _harvest_playlists(driver) -> dict:
+    """Return {name: {"url": spotify_url, "image": cover_image_url}} for playlist rows in the DOM."""
+    for selector in _PLAYLIST_SELECTORS:
+        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        if elements:
+            playlists = {}
+            for a in elements:
+                name = (a.text or "").strip()
+                href = (a.get_attribute("href") or "").split("?")[0]
+                if not name or "/playlist/" not in href or name in playlists:
+                    continue
+                image = ""
+                try:
+                    row = a.find_element(
+                        By.XPATH,
+                        "./ancestor::div[@role='row' or @data-testid='playlist-row'][1]",
+                    )
+                    image = row.find_element(By.CSS_SELECTOR, "img").get_attribute("src") or ""
+                except Exception:
+                    pass
+                playlists[name] = {"url": href, "image": image}
+            return playlists
+    return {}
 
 
 # Spotify — playlist scraper
 
-def scrape_spotify_playlist(playlist_url: str) -> tuple:
+def scrape_spotify_playlist(playlist_url: str, authed: bool = False) -> tuple:
     """
     Return (playlist_name, cover_image_url, {artist_name: spotify_url}).
 
     Raises ValueError for non-Spotify URLs.
+    authed=True reuses the saved Spotify login so private playlists from the
+    user's own library can be read too.
     """
     if not playlist_url.startswith(_SPOTIFY_PLAYLIST_PREFIX):
         raise ValueError("URL must start with https://open.spotify.com/playlist/")
 
-    driver = _make_driver(headless=True)
+    profile_dir = SPOTIFY_PROFILE if authed else None
+    driver = _make_driver(headless=True, profile_dir=profile_dir)
     try:
         driver.get(playlist_url)
         try:
@@ -462,12 +498,13 @@ def index():
 @app.route("/api/concerts")
 def concerts_stream():
     playlist_url = request.args.get("playlist_url", DEFAULT_PLAYLIST).strip()
+    authed = request.args.get("authed") == "1"
 
     def generate():
         try:
             yield sse("status", {"message": "Reading playlist from Spotify..."})
             try:
-                name, image, artists_map = scrape_spotify_playlist(playlist_url)
+                name, image, artists_map = scrape_spotify_playlist(playlist_url, authed=authed)
             except ValueError as e:
                 yield sse("error", {"message": str(e)})
                 return
@@ -549,6 +586,81 @@ def liked_songs_stream():
 
         except Exception as e:
             log.error("Unexpected error in liked_songs_stream: %s", e)
+            yield sse("error", {"message": str(e)})
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    return _sse_response(generate())
+
+
+# Routes — /api/spotify-playlists
+
+_PLAYLISTS_URL = "https://open.spotify.com/collection/playlists"
+_LOGIN_URL_PLAYLISTS = (
+    "https://accounts.spotify.com/login"
+    "?continue=https%3A%2F%2Fopen.spotify.com%2Fcollection%2Fplaylists"
+)
+
+
+@app.route("/api/spotify-playlists")
+def spotify_playlists_stream():
+    """Log into Spotify (if needed) and return the user's playlists for picking."""
+    SPOTIFY_PROFILE.mkdir(parents=True, exist_ok=True)
+
+    def generate():
+        driver = None
+        try:
+            yield sse("status", {"message": "Opening Spotify in a browser window..."})
+            try:
+                driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+            except Exception as exc:
+                log.error("Could not open visible browser for Spotify login: %s", exc)
+                yield sse("error", {
+                    "message": "Logging in needs a desktop browser window and only works "
+                               "when running this app on your own computer — not in the cloud."
+                })
+                return
+
+            driver.get(_PLAYLISTS_URL)
+            time.sleep(PAGE_SETTLE_S)
+
+            if "collection/playlists" not in driver.current_url:
+                driver.get(_LOGIN_URL_PLAYLISTS)
+                yield sse("login_required", {
+                    "message": "Please log into Spotify in the browser window. "
+                               "Once logged in your playlists will load automatically."
+                })
+                try:
+                    WebDriverWait(driver, LOGIN_TIMEOUT_S).until(
+                        lambda d: "collection/playlists" in d.current_url
+                    )
+                    time.sleep(POST_LOGIN_S)
+                except Exception:
+                    yield sse("error", {"message": "Login timed out — please try again."})
+                    return
+
+            yield sse("status", {"message": "Loading your playlists..."})
+            try:
+                WebDriverWait(driver, ARTIST_WAIT_S).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/playlist/']"))
+                )
+            except Exception:
+                log.debug("Timed out waiting for playlist rows")
+
+            playlists_map = _scroll_and_harvest(driver, harvest_fn=_harvest_playlists, max_scrolls=MAX_SCROLLS_SHORT)
+            driver.quit()
+            driver = None
+
+            playlists = [{"name": name, **info} for name, info in playlists_map.items()]
+            yield sse("playlists", {"playlists": playlists})
+            yield sse("done", {})
+
+        except Exception as e:
+            log.error("Unexpected error in spotify_playlists_stream: %s", e)
             yield sse("error", {"message": str(e)})
         finally:
             if driver:

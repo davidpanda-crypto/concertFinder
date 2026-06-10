@@ -132,8 +132,6 @@
     /* Search card */
     .search-card { padding: 1.5rem; overflow: hidden; }
 
-    .input-row { display: flex; gap: 0.6rem; }
-
     #playlist-pill {
       display: none;
       align-items: center;
@@ -354,27 +352,85 @@
       margin-bottom: 1.5rem; font-size: 0.9rem;
     }
 
-    /* Liked Songs button */
-    .liked-songs-row {
+    /* Spotify connect & playlist picker */
+    .connect-desc {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: 0.4rem 0 1rem;
+    }
+    .btn-spotify {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #1DB954;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 0.7rem 1.4rem;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn-spotify:hover:not(:disabled) { opacity: 0.85; }
+    .btn-spotify:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    #playlist-picker { display: none; }
+    .picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+    .btn-link {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+    }
+    .btn-link:hover:not(:disabled) { text-decoration: underline; }
+    .btn-link:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .playlist-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .playlist-tile {
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      margin-top: 0.9rem;
-    }
-    .divider-text { font-size: 0.8rem; color: var(--muted); }
-    .btn-liked {
-      background: none;
-      border: 1px solid #1DB954;
-      color: #1DB954;
-      border-radius: 8px;
-      padding: 0.5rem 1.1rem;
-      font-size: 0.85rem;
-      font-weight: 700;
+      width: 100%;
+      text-align: left;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.55rem 0.8rem;
+      color: var(--text);
       cursor: pointer;
-      transition: background 0.15s, color 0.15s;
+      font-size: 0.88rem;
+      font-weight: 600;
+      transition: border-color 0.15s, opacity 0.15s;
     }
-    .btn-liked:hover:not(:disabled) { background: #1DB954; color: #000; }
-    .btn-liked:disabled { opacity: 0.45; cursor: not-allowed; }
+    .playlist-tile:hover:not(:disabled) { border-color: var(--accent); }
+    .playlist-tile:disabled { opacity: 0.45; cursor: not-allowed; }
+    .playlist-tile img,
+    .playlist-tile .tile-fallback {
+      width: 40px; height: 40px;
+      border-radius: 6px;
+      object-fit: cover;
+      flex-shrink: 0;
+      background: var(--surface);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem;
+    }
+    .playlist-tile.liked-tile { border-color: rgba(29,185,84,0.35); }
+    .playlist-tile.liked-tile .tile-fallback { color: #1DB954; }
 
     /* Login overlay */
     #login-overlay {
@@ -412,7 +468,7 @@
     /* Responsive */
     @media (max-width: 540px) {
       header h1 { font-size: 1.6rem; }
-      .input-row, .add-row, .smtp-grid { flex-direction: column; }
+      .add-row, .smtp-grid { flex-direction: column; }
       .show-card { flex-wrap: wrap; }
       .tix-btn { margin-left: auto; }
     }
@@ -422,27 +478,29 @@
 
 <header>
   <h1>Concert Finder</h1>
-  <p>Paste any Spotify playlist — find upcoming shows in New York City, Prince Edward Island &amp; Washington DC</p>
+  <p>Log in with Spotify — find upcoming shows in New York City, Prince Edward Island &amp; Washington DC</p>
 </header>
 
 <main>
 
   <!-- Search -->
   <div class="card search-card">
-    <label class="field-label" for="playlist-url">Spotify Playlist URL</label>
-    <div class="input-row">
-      <input id="playlist-url" type="text"
-        placeholder="https://open.spotify.com/playlist/..."
-        value="{{ default_playlist }}"
-        onkeydown="if(event.key==='Enter') startSearch()" />
-      <button class="btn-primary" id="search-btn" onclick="startSearch()">Find Concerts</button>
-    </div>
-    <div class="liked-songs-row">
-      <span class="divider-text">or</span>
-      <button class="btn-liked" id="liked-btn" onclick="startLikedSongs()">
-        ♥ Scan My Liked Songs
+    <div id="connect-section">
+      <label class="field-label">Spotify Account</label>
+      <p class="connect-desc">Log in with Spotify to scan your playlists and Liked Songs for upcoming shows.</p>
+      <button class="btn-spotify" id="connect-btn" onclick="startSpotifyLogin()">
+        &#9835; Log in with Spotify
       </button>
     </div>
+
+    <div id="playlist-picker">
+      <div class="picker-header">
+        <label class="field-label" style="margin:0">Choose what to scan</label>
+        <button class="btn-link" id="refresh-btn" onclick="startSpotifyLogin()">Refresh</button>
+      </div>
+      <div class="playlist-list" id="playlist-list"></div>
+    </div>
+
     <div id="playlist-pill">
       <img id="pill-img" src="" alt="" />
       <span id="pill-name"></span>
@@ -567,9 +625,12 @@
 
   function $id(id) { return document.getElementById(id); }
 
-  function setSearchBtn(loading) {
-    $id('search-btn').disabled    = loading;
-    $id('search-btn').textContent = loading ? 'Searching...' : 'Find Concerts';
+  // Disables the connect/refresh buttons and every playlist tile while a
+  // login or search is in progress.
+  function setControlsDisabled(disabled) {
+    $id('connect-btn').disabled = disabled;
+    $id('refresh-btn').disabled = disabled;
+    document.querySelectorAll('.playlist-tile').forEach(t => t.disabled = disabled);
   }
 
   function setStatusText(msg) {
@@ -782,8 +843,7 @@
       const { artists_with_shows, total_artists } = JSON.parse(e.data);
       es.close();
       $id('progress-section').style.display = 'none';
-      setSearchBtn(false);
-      $id('liked-btn').disabled = false;
+      setControlsDisabled(false);
 
       $id('summary-row').style.display = 'flex';
       $id('dl-btn').style.display = artists_with_shows > 0 ? '' : 'none';
@@ -793,7 +853,7 @@
         $id('summary').textContent = 'No artists were found in that playlist.';
         $id('results').innerHTML =
           '<div class="empty-state"><h3>No artists found</h3>' +
-          '<p>Double-check the playlist URL and make sure it\'s public.</p></div>';
+          '<p>This playlist doesn\'t seem to have any artists in it.</p></div>';
       } else if (artists_with_shows > 0) {
         const showCount = allResults.reduce((n, r) => n + r.concerts.length, 0);
         $id('summary').innerHTML =
@@ -818,14 +878,12 @@
           '<div class="error-box">' + esc(JSON.parse(e.data).message) + '</div>';
       }
       finishSearch();
-      $id('liked-btn').disabled = false;
     });
 
     es.onerror = () => {
       $id('login-overlay').classList.remove('visible');
-      if ($id('search-btn').disabled) {
+      if ($id('connect-btn').disabled) {
         finishSearch();
-        $id('liked-btn').disabled = false;
       }
     };
   }
@@ -833,8 +891,7 @@
   // Liked Songs
   function startLikedSongs() {
     resetResultsUI();
-    setSearchBtn(true);
-    $id('liked-btn').disabled = true;
+    setControlsDisabled(true);
 
     if (es) es.close();
     es = new EventSource('/api/liked-songs');
@@ -851,23 +908,112 @@
     attachConcertListeners();
   }
 
-  // Playlist search
-  function startSearch() {
-    const url = $id('playlist-url').value.trim();
+  // Playlist search — pass authed=true for playlists from the user's own library
+  function startSearch(url, authed) {
     if (!url) return;
     resetResultsUI();
-    setSearchBtn(true);
-    $id('liked-btn').disabled = true;
+    setControlsDisabled(true);
     if (es) es.close();
-    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url));
+    const authParam = authed ? '&authed=1' : '';
+    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url) + authParam);
     attachConcertListeners();
   }
 
   function finishSearch() {
     $id('progress-section').style.display = 'none';
-    $id('liked-btn').disabled = false;
-    setSearchBtn(false);
+    setControlsDisabled(false);
     if (es) es.close();
+  }
+
+  // Spotify login + playlist picker
+  function startSpotifyLogin() {
+    resetResultsUI();
+    $id('playlist-picker').style.display = 'none';
+    setControlsDisabled(true);
+
+    if (es) es.close();
+    es = new EventSource('/api/spotify-playlists');
+
+    es.addEventListener('status', e => setStatusText(JSON.parse(e.data).message));
+
+    es.addEventListener('login_required', e => {
+      $id('login-msg').textContent = JSON.parse(e.data).message;
+      $id('login-overlay').classList.add('visible');
+    });
+
+    es.addEventListener('playlists', e => {
+      $id('login-overlay').classList.remove('visible');
+      renderPlaylistPicker(JSON.parse(e.data).playlists);
+    });
+
+    es.addEventListener('done', () => {
+      es.close();
+      $id('progress-section').style.display = 'none';
+      setControlsDisabled(false);
+    });
+
+    es.addEventListener('error', e => {
+      $id('login-overlay').classList.remove('visible');
+      if (e.data) {
+        $id('results').innerHTML =
+          '<div class="error-box">' + esc(JSON.parse(e.data).message) + '</div>';
+      }
+      $id('progress-section').style.display = 'none';
+      setControlsDisabled(false);
+      if (es) es.close();
+    });
+
+    es.onerror = () => {
+      $id('login-overlay').classList.remove('visible');
+      if ($id('connect-btn').disabled) {
+        $id('progress-section').style.display = 'none';
+        setControlsDisabled(false);
+        if (es) es.close();
+      }
+    };
+  }
+
+  function renderPlaylistPicker(playlists) {
+    const list = $id('playlist-list');
+    list.innerHTML = '';
+
+    const likedTile = document.createElement('button');
+    likedTile.className = 'playlist-tile liked-tile';
+    likedTile.innerHTML = '<div class="tile-fallback">&#9829;</div><span>Liked Songs</span>';
+    likedTile.onclick = startLikedSongs;
+    list.appendChild(likedTile);
+
+    playlists.forEach(p => {
+      const tile = document.createElement('button');
+      tile.className = 'playlist-tile';
+
+      if (p.image) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = safeUrl(p.image);
+        img.onerror = function () {
+          const fallback = document.createElement('div');
+          fallback.className = 'tile-fallback';
+          fallback.textContent = '\u{1F3B5}';
+          img.replaceWith(fallback);
+        };
+        tile.appendChild(img);
+      } else {
+        const fallback = document.createElement('div');
+        fallback.className = 'tile-fallback';
+        fallback.textContent = '\u{1F3B5}';
+        tile.appendChild(fallback);
+      }
+
+      const label = document.createElement('span');
+      label.textContent = p.name;
+      tile.appendChild(label);
+      tile.onclick = () => startSearch(p.url, true);
+      list.appendChild(tile);
+    });
+
+    $id('connect-btn').textContent = '♫ Reconnect Spotify';
+    $id('playlist-picker').style.display = 'block';
   }
 
   // Concert cards — Bandsintown-style date groups
