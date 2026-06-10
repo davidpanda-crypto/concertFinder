@@ -23,7 +23,7 @@ import re
 import smtplib
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -53,9 +53,9 @@ log = logging.getLogger(__name__)
 # Scroll behaviour
 SCROLL_PX          = 500     # pixels per scroll step
 SCROLL_DELAY_S     = 0.8     # seconds between scroll steps
-STABLE_ROUNDS      = 6       # consecutive unchanged harvests before stopping
-MAX_SCROLLS_SHORT  = 80      # playlist scrape cap
-MAX_SCROLLS_LONG   = 600     # liked-songs scrape cap (larger libraries)
+STABLE_ROUNDS      = 8       # consecutive unchanged harvests before stopping
+MAX_SCROLLS_SHORT  = 80       # playlist scrape cap
+MAX_SCROLLS_LONG   = 1200     # liked-songs scrape cap (very large libraries)
 
 # Timing
 PAGE_SETTLE_S      = 3       # wait after initial navigation
@@ -207,12 +207,16 @@ return el.scrollHeight;
 """
 
 
-def _scroll_and_harvest(driver, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
+def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG):
     """
     Scroll the list in SCROLL_PX steps, harvesting items via harvest_fn after each step.
     Stops once both the item count AND the scroll height are stable for
     STABLE_ROUNDS consecutive rounds — checking scroll height too avoids
     quitting early during a brief lazy-load pause on large libraries.
+
+    Yields the running item count after each scroll step so callers can
+    surface live progress (useful for very large libraries/playlists).
+    Returns the final {name: ...} dict (via StopIteration.value).
     """
     all_items: dict = {}
     last_count = last_height = stable_rounds = 0
@@ -220,6 +224,7 @@ def _scroll_and_harvest(driver, harvest_fn=_harvest_artists, max_scrolls: int = 
     for _ in range(max_scrolls):
         all_items.update(harvest_fn(driver))
         height = driver.execute_script(_SCROLL_JS, SCROLL_PX)
+        yield len(all_items)
 
         if len(all_items) == last_count and height == last_height:
             stable_rounds += 1
@@ -234,6 +239,36 @@ def _scroll_and_harvest(driver, harvest_fn=_harvest_artists, max_scrolls: int = 
 
     all_items.update(harvest_fn(driver))  # final sweep after scroll settles
     return all_items
+
+
+def _scroll_and_harvest(driver, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
+    """Non-streaming wrapper around _scroll_and_harvest_iter for callers that don't need progress."""
+    gen = _scroll_and_harvest_iter(driver, harvest_fn, max_scrolls)
+    while True:
+        try:
+            next(gen)
+        except StopIteration as stop:
+            return stop.value
+
+
+def _harvest_with_progress(driver, label: str, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG):
+    """
+    Generator: drives _scroll_and_harvest_iter and yields SSE "status" events
+    with a live running count, so very large libraries/playlists show
+    visible progress instead of appearing to hang.
+    Returns the final {name: ...} dict via StopIteration.value — use with
+    `result = yield from _harvest_with_progress(...)`.
+    """
+    last_emitted = -1
+    gen = _scroll_and_harvest_iter(driver, harvest_fn, max_scrolls)
+    while True:
+        try:
+            count = next(gen)
+        except StopIteration as stop:
+            return stop.value
+        if count and count != last_emitted:
+            yield sse("status", {"message": f"{label}... {count} found so far"})
+            last_emitted = count
 
 
 # Spotify injects playlist links inside the library/collection list
@@ -271,9 +306,11 @@ def _harvest_playlists(driver) -> dict:
 
 # Spotify — playlist scraper
 
-def scrape_spotify_playlist(playlist_url: str, authed: bool = False) -> tuple:
+def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
     """
-    Return (playlist_name, cover_image_url, {artist_name: spotify_url}).
+    Generator: yields SSE "status" events with live progress while scraping,
+    and returns (playlist_name, cover_image_url, {artist_name: spotify_url})
+    via StopIteration.value — use with `result = yield from scrape_spotify_playlist(...)`.
 
     Raises ValueError for non-Spotify URLs.
     authed=True reuses the saved Spotify login so private playlists from the
@@ -293,7 +330,9 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False) -> tuple:
         except Exception:
             log.debug("Timed out waiting for artist links — proceeding with what loaded")
 
-        artists = _scroll_and_harvest(driver, max_scrolls=MAX_SCROLLS_SHORT)
+        artists = yield from _harvest_with_progress(
+            driver, "Reading playlist", max_scrolls=MAX_SCROLLS_SHORT
+        )
 
         title = driver.title
         name  = title.split(" - playlist")[0].strip() if " - playlist" in title else title
@@ -394,6 +433,16 @@ def find_concerts(artist_name: str) -> list:
 
             time_el  = row.select_one("time[datetime]")
             date_raw = time_el.get("datetime", "") if time_el else ""
+
+            # Skip shows that have already happened — we only want upcoming dates.
+            if date_raw:
+                try:
+                    event_dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+                    if event_dt < datetime.now(timezone.utc):
+                        continue
+                except Exception:
+                    pass
+
             date_disp, time_disp = _fmt_datetime(date_raw) if date_raw else ("TBA", "")
 
             name_el    = row.select_one("[itemprop='name']")
@@ -504,7 +553,13 @@ def concerts_stream():
         try:
             yield sse("status", {"message": "Reading playlist from Spotify..."})
             try:
-                name, image, artists_map = scrape_spotify_playlist(playlist_url, authed=authed)
+                gen = scrape_spotify_playlist(playlist_url, authed=authed)
+                while True:
+                    try:
+                        yield next(gen)
+                    except StopIteration as stop:
+                        name, image, artists_map = stop.value
+                        break
             except ValueError as e:
                 yield sse("error", {"message": str(e)})
                 return
@@ -574,7 +629,9 @@ def liked_songs_stream():
             except Exception:
                 log.debug("Timed out waiting for artist links in Liked Songs")
 
-            artists_map = _scroll_and_harvest(driver, max_scrolls=MAX_SCROLLS_LONG)
+            artists_map = yield from _harvest_with_progress(
+                driver, "Reading your Liked Songs", max_scrolls=MAX_SCROLLS_LONG
+            )
             driver.quit()
             driver = None
 
@@ -651,7 +708,9 @@ def spotify_playlists_stream():
             except Exception:
                 log.debug("Timed out waiting for playlist rows")
 
-            playlists_map = _scroll_and_harvest(driver, harvest_fn=_harvest_playlists, max_scrolls=MAX_SCROLLS_SHORT)
+            playlists_map = yield from _harvest_with_progress(
+                driver, "Loading your playlists", harvest_fn=_harvest_playlists, max_scrolls=MAX_SCROLLS_SHORT
+            )
             driver.quit()
             driver = None
 

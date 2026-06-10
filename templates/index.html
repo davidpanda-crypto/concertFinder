@@ -1016,7 +1016,18 @@
     $id('playlist-picker').style.display = 'block';
   }
 
-  // Concert cards — Bandsintown-style date groups
+  // Concert cards — Bandsintown-style weekly groups
+
+  // Returns the Monday that starts the week containing `date` (midnight local time).
+  function weekStart(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();              // 0 = Sun .. 6 = Sat
+    const diff = (day === 0 ? -6 : 1) - day; // shift back to Monday
+    d.setDate(d.getDate() + diff);
+    return d;
+  }
+
   function renderResults() {
     const flat = allResults
       .flatMap(r => r.concerts.map(c => ({ artist: r.artist, spotify_url: r.spotify_url, image: r.image, ...c })))
@@ -1029,12 +1040,12 @@
     let groupEl = null;
 
     flat.forEach(c => {
-      const groupKey = c.date_raw ? c.date_raw.slice(0, 10) : 'tba';
+      const groupKey = c.date_raw ? weekStart(c.date_raw).toISOString().slice(0, 10) : 'tba';
       if (groupKey !== lastGroup) {
         lastGroup = groupKey;
         const heading = document.createElement('div');
         heading.className = 'date-heading';
-        heading.textContent = groupKey === 'tba' ? 'Date TBA' : formatGroupDate(c.date_raw);
+        heading.textContent = groupKey === 'tba' ? 'Date TBA' : formatWeekHeading(c.date_raw);
         container.appendChild(heading);
         groupEl = document.createElement('div');
         groupEl.className = 'date-group';
@@ -1044,10 +1055,23 @@
     });
   }
 
-  function formatGroupDate(dateRaw) {
+  // Builds a heading like "THIS WEEK · JUN 8 - JUN 14" or "WEEK OF JUL 6 - JUL 12, 2026".
+  function formatWeekHeading(dateRaw) {
     try {
-      const d = new Date(dateRaw);
-      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
+      const start = weekStart(dateRaw);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+
+      const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const range = fmt(start).toUpperCase() + ' - ' + fmt(end).toUpperCase();
+      const yearSuffix = end.getFullYear() !== new Date().getFullYear() ? ', ' + end.getFullYear() : '';
+
+      const today = weekStart(new Date());
+      const diffWeeks = Math.round((start - today) / (7 * 24 * 60 * 60 * 1000));
+
+      if (diffWeeks === 0) return 'THIS WEEK · ' + range + yearSuffix;
+      if (diffWeeks === 1) return 'NEXT WEEK · ' + range + yearSuffix;
+      return 'WEEK OF ' + range + yearSuffix;
     } catch (e) {
       return 'DATE TBA';
     }
