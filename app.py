@@ -39,9 +39,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-# ---------------------------------------------------------------------------
 # Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,9 +48,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 # Scroll behaviour
 SCROLL_PX          = 600     # pixels per scroll step
@@ -76,9 +72,7 @@ MAX_SMS_SHOWS      = 8       # cap on shows included in a text message
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 _SPOTIFY_PLAYLIST_PREFIX = "https://open.spotify.com/playlist/"
 
-# ---------------------------------------------------------------------------
 # App setup
-# ---------------------------------------------------------------------------
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1 MB — blocks oversized POSTs
@@ -117,9 +111,7 @@ WATCH_CITIES = [
 DEFAULT_PLAYLIST = "https://open.spotify.com/playlist/3eyYxErnxrMTDE6m8zy57w"
 
 
-# ---------------------------------------------------------------------------
 # Security headers + error handlers
-# ---------------------------------------------------------------------------
 
 @app.after_request
 def add_security_headers(resp):
@@ -142,17 +134,13 @@ def request_too_large(_):
     return jsonify({"error": "Request body too large (max 1 MB)"}), 413
 
 
-# ---------------------------------------------------------------------------
 # SSE helper
-# ---------------------------------------------------------------------------
 
 def sse(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
-# ---------------------------------------------------------------------------
 # Selenium — shared driver factory + scroll helper
-# ---------------------------------------------------------------------------
 
 # Spotify injects artist links inside these containers (most specific first)
 _ARTIST_SELECTORS = [
@@ -228,9 +216,7 @@ def _scroll_and_harvest(driver, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
     return all_artists
 
 
-# ---------------------------------------------------------------------------
 # Spotify — playlist scraper
-# ---------------------------------------------------------------------------
 
 def scrape_spotify_playlist(playlist_url: str) -> tuple:
     """
@@ -271,9 +257,7 @@ def scrape_spotify_playlist(playlist_url: str) -> tuple:
         driver.quit()
 
 
-# ---------------------------------------------------------------------------
 # Concert search — Last.fm
-# ---------------------------------------------------------------------------
 
 def _city_for_address(address: str) -> Optional[str]:
     """Map a Last.fm venue address string to a watched-city label, or None."""
@@ -390,9 +374,7 @@ def find_concerts(artist_name: str) -> list:
     return []
 
 
-# ---------------------------------------------------------------------------
 # Concert stream helpers — shared by /api/concerts and /api/liked-songs
-# ---------------------------------------------------------------------------
 
 def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str):
     """
@@ -428,18 +410,14 @@ def _sse_response(generator) -> Response:
     )
 
 
-# ---------------------------------------------------------------------------
 # Routes — pages
-# ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
     return render_template("index.html", default_playlist=DEFAULT_PLAYLIST)
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/concerts
-# ---------------------------------------------------------------------------
 
 @app.route("/api/concerts")
 def concerts_stream():
@@ -467,9 +445,7 @@ def concerts_stream():
     return _sse_response(generate())
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/liked-songs
-# ---------------------------------------------------------------------------
 
 _LIKED_SONGS_URL = "https://open.spotify.com/collection/tracks"
 _LOGIN_URL = (
@@ -536,9 +512,7 @@ def liked_songs_stream():
     return _sse_response(generate())
 
 
-# ---------------------------------------------------------------------------
 # Storage helpers
-# ---------------------------------------------------------------------------
 
 def _read_json(path: Path, default):
     """Read a JSON file, returning default on any error."""
@@ -572,9 +546,7 @@ def _save_mail_cfg(cfg: dict):
     _write_json(MAIL_CFG_FILE, cfg)
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/emails
-# ---------------------------------------------------------------------------
 
 @app.route("/api/emails", methods=["GET"])
 def get_emails():
@@ -600,9 +572,7 @@ def remove_email(email):
     return jsonify(emails)
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/phones
-# ---------------------------------------------------------------------------
 
 @app.route("/api/phones", methods=["GET"])
 def get_phones():
@@ -639,9 +609,7 @@ def get_carriers():
     return jsonify(list(SMS_GATEWAYS.keys()))
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/mail-config
-# ---------------------------------------------------------------------------
 
 def _smtp_password(cfg: dict) -> str:
     """
@@ -674,9 +642,7 @@ def save_mail_cfg():
     return jsonify({"ok": True, "env_override": bool(os.environ.get("SMTP_PASS"))})
 
 
-# ---------------------------------------------------------------------------
 # Email + SMS builders
-# ---------------------------------------------------------------------------
 
 def _safe_url(url: str) -> str:
     """
@@ -774,9 +740,7 @@ def _build_sms_text(flat: list, playlist_name: str) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Routes — /api/send-report
-# ---------------------------------------------------------------------------
 
 @app.route("/api/send-report", methods=["POST"])
 def send_report():

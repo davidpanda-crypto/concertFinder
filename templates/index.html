@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Concert Finder</title>
   <style>
-    /* ── Design tokens ───────────────────────────────────────── */
+    /* Design tokens */
     :root {
       --bg:       #0d0d0d;
       --surface:  #181818;
@@ -19,7 +19,7 @@
       --muted:    #777;
     }
 
-    /* ── Reset ───────────────────────────────────────────────── */
+    /* Reset */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -30,7 +30,7 @@
       line-height: 1.5;
     }
 
-    /* ── Layout ──────────────────────────────────────────────── */
+    /* Layout */
     header {
       text-align: center;
       padding: 2.5rem 1.5rem 2rem;
@@ -62,7 +62,7 @@
       margin-top: 2rem;
     }
 
-    /* ── Shared card shell ───────────────────────────────────── */
+    /* Shared card shell */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -71,7 +71,7 @@
       overflow: hidden;
     }
 
-    /* ── Inputs ──────────────────────────────────────────────── */
+    /* Inputs */
     .field-label {
       display: block;
       font-size: 0.75rem;
@@ -98,7 +98,7 @@
     input:focus { border-color: var(--accent); }
     input::placeholder { color: var(--muted); }
 
-    /* ── Buttons ─────────────────────────────────────────────── */
+    /* Buttons */
     .btn-primary {
       background: linear-gradient(120deg, var(--accent), var(--accent2));
       color: #fff;
@@ -129,7 +129,7 @@
     .btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     .btn-outline:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    /* ── Search card ─────────────────────────────────────────── */
+    /* Search card */
     .search-card { padding: 1.5rem; overflow: hidden; }
 
     .input-row { display: flex; gap: 0.6rem; }
@@ -152,7 +152,7 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
 
-    /* ── Progress ────────────────────────────────────────────── */
+    /* Progress */
     #progress-section { display: none; margin-bottom: 1.75rem; }
 
     .status-line { font-size: 0.88rem; color: var(--muted); margin-bottom: 0.6rem; }
@@ -172,7 +172,7 @@
     }
     .bar-label { text-align: right; font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem; }
 
-    /* ── Summary row ─────────────────────────────────────────── */
+    /* Summary row */
     #summary-row {
       display: none;
       align-items: center;
@@ -188,7 +188,7 @@
     }
     #summary strong { color: var(--accent); }
 
-    /* ── Email panel ─────────────────────────────────────────── */
+    /* Email panel */
     .panel-header {
       display: flex;
       align-items: center;
@@ -264,7 +264,7 @@
     }
     .carrier-select:focus { border-color: var(--accent); }
 
-    /* ── Results ─────────────────────────────────────────────── */
+    /* Results */
     #results { display: flex; flex-direction: column; gap: 1.25rem; }
 
     .artist-card {
@@ -331,7 +331,7 @@
     }
     .tix-btn:hover { opacity: 0.88; }
 
-    /* ── States ──────────────────────────────────────────────── */
+    /* States */
     .empty-state { text-align: center; color: var(--muted); padding: 3.5rem 1rem; }
     .empty-state h3 { font-size: 1.1rem; margin-bottom: 0.4rem; }
 
@@ -343,7 +343,7 @@
       margin-bottom: 1.5rem; font-size: 0.9rem;
     }
 
-    /* ── Liked Songs button ──────────────────────────────────── */
+    /* Liked Songs button */
     .liked-songs-row {
       display: flex;
       align-items: center;
@@ -365,7 +365,7 @@
     .btn-liked:hover:not(:disabled) { background: #1DB954; color: #000; }
     .btn-liked:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    /* ── Login overlay ───────────────────────────────────────── */
+    /* Login overlay */
     #login-overlay {
       display: none;
       position: fixed;
@@ -398,7 +398,7 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Responsive ──────────────────────────────────────────── */
+    /* Responsive */
     @media (max-width: 540px) {
       header h1 { font-size: 1.6rem; }
       .input-row, .add-row, .smtp-grid { flex-direction: column; }
@@ -530,12 +530,12 @@
 </footer>
 
 <script>
-  // ── State ────────────────────────────────────────────────────
+  // State
   let es           = null;
   let allResults   = [];
   let playlistLabel = 'Concert Report';
 
-  // ── Utilities ────────────────────────────────────────────────
+  // Utilities
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = String(s);
@@ -553,7 +553,7 @@
     $id('status-text').textContent = msg;
   }
 
-  // ── Email panel ──────────────────────────────────────────────
+  // Email panel
   function toggleEmailPanel() {
     $id('email-panel-body').classList.toggle('open');
     $id('email-chevron').classList.toggle('open');
@@ -712,7 +712,7 @@
     refreshSendBtn();
   }
 
-  // ── Shared helpers ───────────────────────────────────────────
+  // Shared helpers
   function resetResultsUI() {
     allResults    = [];
     playlistLabel = 'Concert Report';
@@ -801,7 +801,7 @@
     };
   }
 
-  // ── Liked Songs ──────────────────────────────────────────────
+  // Liked Songs
   function startLikedSongs() {
     resetResultsUI();
     setSearchBtn(true);
@@ -822,7 +822,7 @@
     attachConcertListeners();
   }
 
-  // ── Playlist search ──────────────────────────────────────────
+  // Playlist search
   function startSearch() {
     const url = $id('playlist-url').value.trim();
     if (!url) return;
@@ -841,7 +841,7 @@
     if (es) es.close();
   }
 
-  // ── Concert cards ────────────────────────────────────────────
+  // Concert cards
   function appendCard(data) {
     const rows = data.concerts.map(c => {
       const timeStr  = c.time    ? ' &bull; ' + esc(c.time)  : '';
@@ -879,7 +879,7 @@
     $id('results').appendChild(card);
   }
 
-  // ── Download TXT ─────────────────────────────────────────────
+  // Download TXT
   function downloadTxt() {
     const flat = allResults
       .flatMap(r => r.concerts.map(c => ({ artist: r.artist, ...c })))
@@ -911,7 +911,7 @@
     URL.revokeObjectURL(a.href);
   }
 
-  // ── Init ─────────────────────────────────────────────────────
+  // Init
   window.addEventListener('DOMContentLoaded', () => {
     loadRecipients();
     loadSmtpConfig();
