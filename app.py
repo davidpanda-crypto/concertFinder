@@ -103,9 +103,21 @@ BROWSER_UA = (
 BROWSER_HEADERS = {"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9"}
 
 WATCH_CITIES = [
-    {"label": "New York City",        "keywords": ["new york", "brooklyn", "bronx", "queens", "staten island", "nyc"]},
-    {"label": "Prince Edward Island", "keywords": ["charlottetown", "prince edward island", "pei"]},
-    {"label": "Washington DC",        "keywords": ["washington", "washington dc", "arlington", "alexandria"]},
+    {
+        "label": "New York City",
+        "keywords": ["new york", "brooklyn", "bronx", "queens", "manhattan", "staten island", "nyc"],
+        "country": "united states",
+    },
+    {
+        "label": "Prince Edward Island",
+        "keywords": ["charlottetown", "prince edward island", "pei"],
+        "country": "canada",
+    },
+    {
+        "label": "Washington DC",
+        "keywords": ["washington dc", "washington, d.c.", "washington", "arlington", "alexandria"],
+        "country": "united states",
+    },
 ]
 
 DEFAULT_PLAYLIST = "https://open.spotify.com/playlist/3eyYxErnxrMTDE6m8zy57w"
@@ -394,11 +406,21 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
 # Concert search — Last.fm
 
 def _city_for_address(address: str) -> Optional[str]:
-    """Map a Last.fm venue address string to a watched-city label, or None."""
+    """
+    Map a Last.fm venue address string to a watched-city label, or None.
+
+    Matching requires the address to also mention the watched city's country
+    (so e.g. "Brisbane, Queensland, Australia" can't match "queens"), and
+    keywords are matched as whole words (so "queens" doesn't match inside
+    "queensland", and "pei" doesn't match inside an unrelated word).
+    """
     text = address.lower()
     for city in WATCH_CITIES:
-        if any(kw in text for kw in city["keywords"]):
-            return city["label"]
+        if city["country"] not in text:
+            continue
+        for kw in city["keywords"]:
+            if re.search(r"\b" + re.escape(kw) + r"\b", text):
+                return city["label"]
     return None
 
 
@@ -500,7 +522,6 @@ def find_concerts(artist_name: str) -> list:
                 "date_raw":    date_raw,
                 "time":        time_disp,
                 "venue":       venue or city,
-                "address":     address,
                 "city":        city,
                 "tickets_url": url,
             })
