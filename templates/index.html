@@ -1,923 +1,257 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Concert Finder</title>
-  <style>
-    /* ── Design tokens ───────────────────────────────────────── */
-    :root {
-      --bg:       #0d0d0d;
-      --surface:  #181818;
-      --surface2: #222;
-      --border:   #2c2c2c;
-      --accent:   #a855f7;
-      --accent2:  #ec4899;
-      --green:    #22c55e;
-      --red:      #f87171;
-      --text:     #efefef;
-      --muted:    #777;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Timezone Clock</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    /* ── Reset ───────────────────────────────────────────────── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      min-height: 100vh;
-      line-height: 1.5;
-    }
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
 
-    /* ── Layout ──────────────────────────────────────────────── */
-    header {
-      text-align: center;
-      padding: 2.5rem 1.5rem 2rem;
-      border-bottom: 1px solid var(--border);
-    }
-    header h1 {
-      font-size: 2.2rem;
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      background: linear-gradient(120deg, var(--accent), var(--accent2));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    header p { color: var(--muted); margin-top: 0.4rem; font-size: 0.95rem; }
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 50px;
+        }
 
-    main {
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 2rem 1.25rem 4rem;
-    }
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
 
-    footer {
-      text-align: center;
-      padding: 2rem;
-      font-size: 0.75rem;
-      color: var(--muted);
-      border-top: 1px solid var(--border);
-      margin-top: 2rem;
-    }
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
 
-    /* ── Shared card shell ───────────────────────────────────── */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      margin-bottom: 1.75rem;
-      overflow: hidden;
-    }
+        .clocks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
 
-    /* ── Inputs ──────────────────────────────────────────────── */
-    .field-label {
-      display: block;
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 0.6rem;
-    }
+        .clock-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            text-align: center;
+        }
 
-    input[type="text"],
-    input[type="email"],
-    input[type="password"] {
-      width: 100%;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.65rem 1rem;
-      color: var(--text);
-      font-size: 0.88rem;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-    input:focus { border-color: var(--accent); }
-    input::placeholder { color: var(--muted); }
+        .clock-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3);
+        }
 
-    /* ── Buttons ─────────────────────────────────────────────── */
-    .btn-primary {
-      background: linear-gradient(120deg, var(--accent), var(--accent2));
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 0.68rem 1.4rem;
-      font-size: 0.9rem;
-      font-weight: 700;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: opacity 0.15s;
-      flex-shrink: 0;
-    }
-    .btn-primary:hover:not(:disabled) { opacity: 0.88; }
-    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+        .timezone-name {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
 
-    .btn-outline {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 8px;
-      padding: 0.6rem 1.2rem;
-      font-size: 0.85rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: border-color 0.15s, color 0.15s;
-    }
-    .btn-outline:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-    .btn-outline:disabled { opacity: 0.45; cursor: not-allowed; }
+        .timezone-display {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 20px;
+        }
 
-    /* ── Search card ─────────────────────────────────────────── */
-    .search-card { padding: 1.5rem; overflow: hidden; }
+        .digital-time {
+            font-family: 'Courier New', monospace;
+            font-size: 3.5em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 20px 0;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
 
-    .input-row { display: flex; gap: 0.6rem; }
+        .time-details {
+            font-size: 0.95em;
+            color: #666;
+            margin-top: 15px;
+            line-height: 1.6;
+        }
 
-    #playlist-pill {
-      display: none;
-      align-items: center;
-      gap: 0.75rem;
-      margin-top: 1rem;
-      padding: 0.6rem 0.9rem;
-      background: var(--surface2);
-      border-radius: 8px;
-    }
-    #playlist-pill img {
-      width: 36px; height: 36px;
-      border-radius: 4px; object-fit: cover; flex-shrink: 0;
-    }
-    #playlist-pill span {
-      font-size: 0.88rem; font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
+        .date {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
 
-    /* ── Progress ────────────────────────────────────────────── */
-    #progress-section { display: none; margin-bottom: 1.75rem; }
+        .offset {
+            font-size: 0.85em;
+            color: #999;
+            font-family: 'Courier New', monospace;
+        }
 
-    .status-line { font-size: 0.88rem; color: var(--muted); margin-bottom: 0.6rem; }
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.2em;
+        }
 
-    .bar-track {
-      background: var(--surface2);
-      border-radius: 99px;
-      height: 5px;
-      overflow: hidden;
-    }
-    .bar-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
-      border-radius: 99px;
-      transition: width 0.35s ease;
-    }
-    .bar-label { text-align: right; font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem; }
+        .error {
+            background: #ff6b6b;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: center;
+        }
 
-    /* ── Summary row ─────────────────────────────────────────── */
-    #summary-row {
-      display: none;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-bottom: 1.5rem;
-    }
-    #summary {
-      flex: 1;
-      min-width: 200px;
-      font-size: 0.88rem;
-      color: var(--muted);
-    }
-    #summary strong { color: var(--accent); }
+        .refresh-info {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.9em;
+            margin-top: 30px;
+        }
 
-    /* ── Email panel ─────────────────────────────────────────── */
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 1rem 1.25rem;
-      cursor: pointer;
-      user-select: none;
-    }
-    .panel-header:hover { background: rgba(255,255,255,.03); }
-    .panel-title { font-size: 0.88rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2em;
+            }
 
-    .count-badge {
-      font-size: 0.7rem; font-weight: 700;
-      background: var(--accent); color: #fff;
-      padding: 0.1rem 0.5rem; border-radius: 99px;
-    }
-    .chevron { font-size: 0.75rem; color: var(--muted); transition: transform 0.2s; }
-    .chevron.open { transform: rotate(180deg); }
+            .clocks-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
 
-    .panel-body { display: none; padding: 0 1.25rem 1.25rem; border-top: 1px solid var(--border); }
-    .panel-body.open { display: block; }
+            .digital-time {
+                font-size: 2.5em;
+            }
+        }
 
-    .section-label {
-      font-size: 0.72rem; font-weight: 700; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.07em;
-      margin: 1rem 0 0.6rem;
-    }
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
 
-    .smtp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
-    .smtp-grid input { border-radius: 7px; padding: 0.55rem 0.85rem; font-size: 0.83rem; }
-    .smtp-full { margin-top: 0.5rem; }
-    .smtp-full input { border-radius: 7px; padding: 0.55rem 0.85rem; font-size: 0.83rem; }
-
-    .smtp-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.65rem; }
-    .smtp-status { font-size: 0.78rem; }
-    .smtp-status.ok  { color: var(--green); }
-    .smtp-status.err { color: var(--red); }
-
-    .smtp-hint { font-size: 0.72rem; color: var(--muted); margin-top: 0.5rem; }
-    .smtp-hint a { color: var(--accent); }
-
-    .smtp-section { margin-bottom: 1.1rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--border); }
-
-    .add-row { display: flex; gap: 0.5rem; }
-    .add-row input { border-radius: 7px; padding: 0.55rem 0.85rem; font-size: 0.83rem; }
-
-    .recipient-list { list-style: none; margin-top: 0.65rem; display: flex; flex-direction: column; gap: 0.35rem; }
-    .recipient-item {
-      display: flex; align-items: center; justify-content: space-between;
-      background: var(--surface2); border-radius: 7px;
-      padding: 0.45rem 0.75rem; font-size: 0.83rem;
-      animation: pop-in 0.2s ease both;
-    }
-    .remove-btn {
-      background: none; border: none; color: var(--muted);
-      cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0.2rem;
-      transition: color 0.15s;
-    }
-    .remove-btn:hover { color: var(--red); }
-    .no-recipients { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
-
-    .carrier-select {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 0.55rem 0.6rem;
-      color: var(--text);
-      font-size: 0.83rem;
-      outline: none;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: border-color 0.2s;
-    }
-    .carrier-select:focus { border-color: var(--accent); }
-
-    /* ── Results ─────────────────────────────────────────────── */
-    #results { display: flex; flex-direction: column; gap: 1.25rem; }
-
-    .artist-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      animation: pop-in 0.3s ease both;
-    }
-    @keyframes pop-in {
-      from { opacity: 0; transform: translateY(8px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    .artist-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0.9rem 1.2rem;
-      border-bottom: 1px solid var(--border);
-      gap: 0.75rem;
-    }
-    .artist-name { font-size: 1rem; font-weight: 700; }
-    .artist-name a {
-      color: #1DB954; font-size: 0.78rem; font-weight: 500;
-      text-decoration: none; margin-left: 0.6rem; vertical-align: middle;
-    }
-    .artist-name a:hover { text-decoration: underline; }
-    .show-badge {
-      font-size: 0.72rem; font-weight: 600; color: var(--muted);
-      background: var(--surface2); padding: 0.2rem 0.65rem;
-      border-radius: 99px; white-space: nowrap; flex-shrink: 0;
-    }
-
-    .concert-list { list-style: none; }
-    .concert-row {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 1rem; padding: 0.9rem 1.2rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .concert-row:last-child { border-bottom: none; }
-
-    .concert-info { min-width: 0; }
-    .concert-title {
-      font-size: 0.9rem; font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      margin-bottom: 0.3rem;
-    }
-    .concert-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; font-size: 0.78rem; color: var(--muted); }
-
-    .city-badge {
-      display: inline-block; font-size: 0.68rem; font-weight: 700;
-      color: var(--accent); background: rgba(168,85,247,0.12);
-      padding: 0.1rem 0.45rem; border-radius: 4px;
-      vertical-align: middle; letter-spacing: 0.02em;
-    }
-
-    .tix-btn {
-      flex-shrink: 0;
-      display: inline-block;
-      background: linear-gradient(120deg, var(--accent), var(--accent2));
-      color: #fff; text-decoration: none;
-      padding: 0.45rem 1rem; border-radius: 6px;
-      font-size: 0.78rem; font-weight: 700; white-space: nowrap;
-      transition: opacity 0.15s;
-    }
-    .tix-btn:hover { opacity: 0.88; }
-
-    /* ── States ──────────────────────────────────────────────── */
-    .empty-state { text-align: center; color: var(--muted); padding: 3.5rem 1rem; }
-    .empty-state h3 { font-size: 1.1rem; margin-bottom: 0.4rem; }
-
-    .error-box {
-      background: rgba(239,68,68,0.08);
-      border: 1px solid rgba(239,68,68,0.25);
-      color: var(--red);
-      padding: 1rem 1.2rem; border-radius: 10px;
-      margin-bottom: 1.5rem; font-size: 0.9rem;
-    }
-
-    /* ── Liked Songs button ──────────────────────────────────── */
-    .liked-songs-row {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      margin-top: 0.9rem;
-    }
-    .divider-text { font-size: 0.8rem; color: var(--muted); }
-    .btn-liked {
-      background: none;
-      border: 1px solid #1DB954;
-      color: #1DB954;
-      border-radius: 8px;
-      padding: 0.5rem 1.1rem;
-      font-size: 0.85rem;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
-    }
-    .btn-liked:hover:not(:disabled) { background: #1DB954; color: #000; }
-    .btn-liked:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    /* ── Login overlay ───────────────────────────────────────── */
-    #login-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.75);
-      z-index: 100;
-      align-items: center;
-      justify-content: center;
-    }
-    #login-overlay.visible { display: flex; }
-    #login-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 2.5rem 2rem;
-      max-width: 380px;
-      width: 90%;
-      text-align: center;
-    }
-    #login-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
-    #login-box h3 { font-size: 1.2rem; margin-bottom: 0.5rem; }
-    #login-box p  { font-size: 0.88rem; color: var(--muted); line-height: 1.5; }
-    .login-spinner {
-      width: 32px; height: 32px;
-      border: 3px solid var(--border);
-      border-top-color: #1DB954;
-      border-radius: 50%;
-      margin: 1.25rem auto 0;
-      animation: spin 0.9s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Responsive ──────────────────────────────────────────── */
-    @media (max-width: 540px) {
-      header h1 { font-size: 1.6rem; }
-      .input-row, .add-row, .smtp-grid { flex-direction: column; }
-      .concert-row { flex-wrap: wrap; }
-    }
-  </style>
+        .updating {
+            animation: pulse 0.5s ease-in-out;
+        }
+    </style>
 </head>
 <body>
-
-<header>
-  <h1>Concert Finder</h1>
-  <p>Paste any Spotify playlist — find upcoming shows in New York City, Prince Edward Island &amp; Washington DC</p>
-</header>
-
-<main>
-
-  <!-- Search -->
-  <div class="card search-card">
-    <label class="field-label" for="playlist-url">Spotify Playlist URL</label>
-    <div class="input-row">
-      <input id="playlist-url" type="text"
-        placeholder="https://open.spotify.com/playlist/..."
-        value="{{ default_playlist }}"
-        onkeydown="if(event.key==='Enter') startSearch()" />
-      <button class="btn-primary" id="search-btn" onclick="startSearch()">Find Concerts</button>
-    </div>
-    <div class="liked-songs-row">
-      <span class="divider-text">or</span>
-      <button class="btn-liked" id="liked-btn" onclick="startLikedSongs()">
-        ♥ Scan My Liked Songs
-      </button>
-    </div>
-    <div id="playlist-pill">
-      <img id="pill-img" src="" alt="" />
-      <span id="pill-name"></span>
-    </div>
-  </div>
-
-  <!-- Login overlay (shown when browser window opens) -->
-  <div id="login-overlay">
-    <div id="login-box">
-      <div id="login-icon">&#9835;</div>
-      <h3>Log into Spotify</h3>
-      <p id="login-msg">A browser window just opened. Log into Spotify there — this only happens once.</p>
-      <div class="login-spinner"></div>
-    </div>
-  </div>
-
-  <!-- Email panel -->
-  <div class="card">
-    <div class="panel-header" onclick="toggleEmailPanel()">
-      <div class="panel-title">
-        ✉ Email Recipients
-        <span class="count-badge" id="email-count">0</span>
-      </div>
-      <span class="chevron" id="email-chevron">▼</span>
-    </div>
-    <div class="panel-body" id="email-panel-body">
-
-      <div class="smtp-section">
-        <div class="section-label">SMTP Settings (Gmail recommended)</div>
-        <div class="smtp-grid">
-          <input id="smtp-user" type="email" placeholder="your@gmail.com" />
-          <input id="smtp-pass" type="password" placeholder="App password" />
+    <div class="container">
+        <div class="header">
+            <h1>🌍 Global Timezone Clock</h1>
+            <p>Current time across the world</p>
         </div>
-        <div class="smtp-full">
-          <input id="smtp-host" type="text" placeholder="SMTP host (default: smtp.gmail.com)" />
+
+        <div id="clocks-container" class="clocks-grid">
+            <div class="loading">Loading timezones...</div>
         </div>
-        <div class="smtp-actions">
-          <button class="btn-outline" onclick="saveSmtpConfig()">Save SMTP</button>
-          <span class="smtp-status" id="smtp-status"></span>
+
+        <div class="refresh-info">
+            ⏱️ Updates every second
         </div>
-        <p class="smtp-hint">
-          Gmail: enable 2FA →
-          <a href="https://myaccount.google.com/apppasswords" target="_blank">create an App Password</a>
-          → paste it above.
-        </p>
-      </div>
 
-      <!-- Email recipients -->
-      <div class="section-label">Email Recipients</div>
-      <div class="add-row">
-        <input id="new-email-input" type="email" placeholder="name@example.com"
-          onkeydown="if(event.key==='Enter') addEmail()" />
-        <button class="btn-primary" onclick="addEmail()">Add</button>
-      </div>
-      <ul class="recipient-list" id="recipient-list"></ul>
-      <p class="no-recipients" id="no-email-msg">No email recipients yet.</p>
-
-      <!-- SMS recipients -->
-      <div class="section-label" style="margin-top:1.25rem">Text Message Recipients</div>
-      <div class="add-row">
-        <input id="new-phone-input" type="tel" placeholder="10-digit number (e.g. 2025551234)"
-          onkeydown="if(event.key==='Enter') addPhone()" />
-        <select id="carrier-select" class="carrier-select">
-          <option value="">Carrier…</option>
-        </select>
-        <button class="btn-primary" onclick="addPhone()">Add</button>
-      </div>
-      <ul class="recipient-list" id="phone-list"></ul>
-      <p class="no-recipients" id="no-phone-msg">No phone recipients yet.</p>
-      <p class="smtp-hint">Uses your SMTP to deliver via carrier gateway — no extra accounts needed.</p>
-
+        <div id="error-container"></div>
     </div>
-  </div>
 
-  <!-- Progress -->
-  <div id="progress-section">
-    <div class="status-line" id="status-text">Starting...</div>
-    <div class="bar-track"><div class="bar-fill" id="bar-fill"></div></div>
-    <div class="bar-label" id="bar-label"></div>
-  </div>
+    <script>
+        const container = document.getElementById('clocks-container');
+        const errorContainer = document.getElementById('error-container');
 
-  <!-- Summary + actions -->
-  <div id="summary-row">
-    <div id="summary"></div>
-    <button class="btn-outline" id="dl-btn"    onclick="downloadTxt()">Save as TXT</button>
-    <button class="btn-outline" id="email-btn" onclick="sendReport()" disabled>Send by Email</button>
-  </div>
+        async function loadTimezones() {
+            try {
+                const response = await fetch('/api/time');
+                if (!response.ok) throw new Error('Failed to load timezones');
+                
+                const timeData = await response.json();
+                renderClocks(timeData);
+            } catch (error) {
+                console.error('Error loading timezones:', error);
+                errorContainer.innerHTML = `<div class="error">Error loading timezone data: ${error.message}</div>`;
+            }
+        }
 
-  <!-- Results -->
-  <div id="results"></div>
+        function renderClocks(timeData) {
+            container.innerHTML = '';
 
-</main>
+            // Sort timezones by offset
+            const sortedTZ = Object.keys(timeData).sort((a, b) => {
+                const offsetA = parseFloat(timeData[a].offset.slice(0, 3));
+                const offsetB = parseFloat(timeData[b].offset.slice(0, 3));
+                return offsetA - offsetB;
+            });
 
-<footer>
-  New York City &bull; Prince Edward Island &bull; Washington DC
-  &bull; Concert data from Last.fm &bull; Artist data from Spotify
-</footer>
+            sortedTZ.forEach(tz => {
+                const data = timeData[tz];
+                const card = document.createElement('div');
+                card.className = 'clock-card';
+                card.innerHTML = `
+                    <div class="timezone-name">${formatTimezoneName(tz)}</div>
+                    <div class="timezone-display">${data.display_name}</div>
+                    <div class="digital-time" data-timezone="${tz}">${data.time}</div>
+                    <div class="time-details">
+                        <div class="date">${data.date}</div>
+                        <div class="offset">UTC ${formatOffset(data.offset)}</div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
 
-<script>
-  // ── State ────────────────────────────────────────────────────
-  let es           = null;
-  let allResults   = [];
-  let playlistLabel = 'Concert Report';
+        function updateTimes() {
+            const timeElements = document.querySelectorAll('.digital-time');
+            
+            timeElements.forEach(element => {
+                const timezone = element.getAttribute('data-timezone');
+                fetch(`/api/time/${timezone}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) return;
+                        element.classList.add('updating');
+                        element.textContent = data.time;
+                        setTimeout(() => element.classList.remove('updating'), 500);
+                    })
+                    .catch(error => console.error('Error updating time:', error));
+            });
+        }
 
-  // ── Utilities ────────────────────────────────────────────────
-  function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-  }
+        function formatTimezoneName(tz) {
+            return tz.replace(/_/g, ' ').replace(/\//g, ' • ');
+        }
 
-  function $id(id) { return document.getElementById(id); }
+        function formatOffset(offset) {
+            if (offset === '+0000' || offset === '-0000') return '±0:00';
+            const sign = offset[0];
+            const hours = offset.slice(1, 3);
+            const minutes = offset.slice(3, 5);
+            return `${sign}${parseInt(hours)}:${minutes}`;
+        }
 
-  function setSearchBtn(loading) {
-    $id('search-btn').disabled    = loading;
-    $id('search-btn').textContent = loading ? 'Searching...' : 'Find Concerts';
-  }
+        // Load timezones on page load
+        loadTimezones();
 
-  function setStatusText(msg) {
-    $id('status-text').textContent = msg;
-  }
-
-  // ── Email panel ──────────────────────────────────────────────
-  function toggleEmailPanel() {
-    $id('email-panel-body').classList.toggle('open');
-    $id('email-chevron').classList.toggle('open');
-  }
-
-  function renderRecipients(emails) {
-    const list  = $id('recipient-list');
-    const empty = $id('no-email-msg');
-    list.innerHTML = '';
-    empty.style.display = emails.length ? 'none' : 'block';
-    emails.forEach(email => {
-      const li = document.createElement('li');
-      li.className = 'recipient-item';
-      li.innerHTML =
-        '<span>' + esc(email) + '</span>' +
-        '<button class="remove-btn" onclick="removeEmail(\'' + esc(email) + '\')" title="Remove">✕</button>';
-      list.appendChild(li);
-    });
-    updateRecipientCount();
-    refreshSendBtn();
-  }
-
-  function refreshSendBtn() {
-    const total = parseInt($id('email-count').textContent, 10) || 0;
-    $id('email-btn').disabled = !(total > 0 && allResults.length > 0);
-  }
-
-  async function loadRecipients() {
-    const [emails, phones] = await Promise.all([
-      fetch('/api/emails').then(r => r.json()),
-      fetch('/api/phones').then(r => r.json()),
-    ]);
-    renderRecipients(emails);
-    renderPhones(phones);
-  }
-
-  async function loadCarriers() {
-    const carriers = await fetch('/api/carriers').then(r => r.json());
-    const sel = $id('carrier-select');
-    carriers.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = opt.textContent = c;
-      sel.appendChild(opt);
-    });
-  }
-
-  function renderPhones(phones) {
-    const list  = $id('phone-list');
-    const empty = $id('no-phone-msg');
-    list.innerHTML = '';
-    empty.style.display = phones.length ? 'none' : 'block';
-    phones.forEach(p => {
-      const li = document.createElement('li');
-      li.className = 'recipient-item';
-      li.innerHTML =
-        '<span>' + esc(p.number) + ' <span style="color:var(--muted);font-size:0.78rem">(' + esc(p.carrier) + ')</span></span>' +
-        '<button class="remove-btn" onclick="removePhone(\'' + esc(p.number) + '\',\'' + esc(p.carrier) + '\')" title="Remove">✕</button>';
-      list.appendChild(li);
-    });
-    updateRecipientCount();
-  }
-
-  function updateRecipientCount() {
-    const emails = $id('recipient-list').children.length;
-    const phones = $id('phone-list').children.length;
-    $id('email-count').textContent = emails + phones;
-  }
-
-  async function addPhone() {
-    const number  = $id('new-phone-input').value.trim();
-    const carrier = $id('carrier-select').value;
-    if (!number || !carrier) { alert('Enter a phone number and select a carrier.'); return; }
-    const result = await fetch('/api/phones', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ number, carrier }),
-    }).then(r => r.json());
-    if (result.error) { alert(result.error); return; }
-    $id('new-phone-input').value = '';
-    $id('carrier-select').value  = '';
-    renderPhones(result);
-  }
-
-  async function removePhone(number, carrier) {
-    const phones = await fetch('/api/phones/' + encodeURIComponent(number) + '/' + encodeURIComponent(carrier), { method: 'DELETE' })
-      .then(r => r.json());
-    renderPhones(phones);
-  }
-
-  async function addEmail() {
-    const input = $id('new-email-input');
-    const email = input.value.trim();
-    if (!email) return;
-    const emails = await fetch('/api/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    }).then(r => r.json());
-    input.value = '';
-    renderRecipients(emails);
-  }
-
-  async function removeEmail(email) {
-    const emails = await fetch('/api/emails/' + encodeURIComponent(email), { method: 'DELETE' })
-      .then(r => r.json());
-    renderRecipients(emails);
-  }
-
-  async function loadSmtpConfig() {
-    const cfg    = await fetch('/api/mail-config').then(r => r.json());
-    const status = $id('smtp-status');
-    $id('smtp-user').value = cfg.smtp_user || '';
-    $id('smtp-host').value = cfg.smtp_host !== 'smtp.gmail.com' ? cfg.smtp_host : '';
-    status.textContent = cfg.configured ? '✓ Configured' : 'Not configured';
-    status.className   = 'smtp-status ' + (cfg.configured ? 'ok' : 'err');
-  }
-
-  async function saveSmtpConfig() {
-    const user = $id('smtp-user').value.trim();
-    const pass = $id('smtp-pass').value.trim();
-    const host = $id('smtp-host').value.trim() || 'smtp.gmail.com';
-    if (!user) { alert('Enter your email address'); return; }
-    if (!pass) { alert('Enter your app password');  return; }
-    await fetch('/api/mail-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ smtp_user: user, smtp_pass: pass, smtp_host: host }),
-    });
-    $id('smtp-pass').value = '';
-    await loadSmtpConfig();
-  }
-
-  async function sendReport() {
-    const btn = $id('email-btn');
-    btn.disabled    = true;
-    btn.textContent = 'Sending...';
-    try {
-      const data = await fetch('/api/send-report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ results: allResults, playlist_name: playlistLabel }),
-      }).then(r => r.json());
-
-      if (data.error) {
-        alert('Error: ' + data.error);
-      } else {
-        const ok  = data.sent.length;
-        const bad = data.errors.length;
-        alert('Sent to ' + ok + ' recipient' + (ok !== 1 ? 's' : '') +
-          (bad ? '\nFailed: ' + data.errors.map(e => e.email).join(', ') : ''));
-      }
-    } catch (e) {
-      alert('Send failed: ' + e.message);
-    }
-    btn.textContent = 'Send by Email';
-    refreshSendBtn();
-  }
-
-  // ── Shared helpers ───────────────────────────────────────────
-  function resetResultsUI() {
-    allResults    = [];
-    playlistLabel = 'Concert Report';
-    $id('results').innerHTML              = '';
-    $id('summary-row').style.display      = 'none';
-    $id('summary').textContent            = '';
-    $id('progress-section').style.display = 'block';
-    $id('bar-fill').style.width           = '0%';
-    $id('bar-label').textContent          = '';
-    $id('playlist-pill').style.display    = 'none';
-  }
-
-  // Attaches the standard SSE event listeners to an already-open EventSource.
-  // Both playlist search and liked-songs share these handlers.
-  function attachConcertListeners() {
-    es.addEventListener('status', e => setStatusText(JSON.parse(e.data).message));
-
-    es.addEventListener('playlist_info', e => {
-      const d = JSON.parse(e.data);
-      playlistLabel           = d.name || 'Concert Report';
-      $id('pill-img').src     = d.image || '';
-      $id('pill-img').style.display = d.image ? 'block' : 'none';
-      $id('pill-name').textContent  = playlistLabel;
-      $id('playlist-pill').style.display = 'flex';
-    });
-
-    es.addEventListener('artists_found', e => {
-      setStatusText('Found ' + JSON.parse(e.data).count + ' artists — searching for shows...');
-    });
-
-    es.addEventListener('progress', e => {
-      const { current, total, artist } = JSON.parse(e.data);
-      const pct = Math.round((current / total) * 100);
-      $id('bar-fill').style.width  = pct + '%';
-      $id('bar-label').textContent = current + ' / ' + total;
-      setStatusText('Checking: ' + artist);
-    });
-
-    es.addEventListener('result', e => {
-      const data = JSON.parse(e.data);
-      allResults.push(data);
-      appendCard(data);
-    });
-
-    es.addEventListener('done', e => {
-      const { artists_with_shows, total_artists } = JSON.parse(e.data);
-      es.close();
-      $id('progress-section').style.display = 'none';
-      setSearchBtn(false);
-      $id('liked-btn').disabled = false;
-
-      $id('summary-row').style.display = 'flex';
-      $id('dl-btn').style.display = artists_with_shows > 0 ? '' : 'none';
-      refreshSendBtn();
-
-      if (artists_with_shows > 0) {
-        $id('summary').innerHTML =
-          'Found <strong>' + artists_with_shows + '</strong> artist' +
-          (artists_with_shows !== 1 ? 's' : '') +
-          ' with upcoming shows out of ' + total_artists + ' in the playlist.';
-      } else {
-        $id('summary').textContent =
-          'No upcoming shows found in any watched city for the ' + total_artists + ' artists.';
-        $id('results').innerHTML =
-          '<div class="empty-state"><h3>No shows found</h3>' +
-          '<p>Try a different playlist or check back when your artists announce new dates.</p></div>';
-      }
-    });
-
-    es.addEventListener('error', e => {
-      $id('login-overlay').classList.remove('visible');
-      if (e.data) {
-        $id('results').innerHTML =
-          '<div class="error-box">' + esc(JSON.parse(e.data).message) + '</div>';
-      }
-      finishSearch();
-      $id('liked-btn').disabled = false;
-    });
-
-    es.onerror = () => {
-      $id('login-overlay').classList.remove('visible');
-      if ($id('search-btn').disabled) {
-        finishSearch();
-        $id('liked-btn').disabled = false;
-      }
-    };
-  }
-
-  // ── Liked Songs ──────────────────────────────────────────────
-  function startLikedSongs() {
-    resetResultsUI();
-    setSearchBtn(true);
-    $id('liked-btn').disabled = true;
-
-    if (es) es.close();
-    es = new EventSource('/api/liked-songs');
-
-    // Show login overlay when server says browser window opened
-    es.addEventListener('login_required', e => {
-      $id('login-msg').textContent = JSON.parse(e.data).message;
-      $id('login-overlay').classList.add('visible');
-    });
-
-    // Hide login overlay once we're past the login step
-    es.addEventListener('playlist_info', () => $id('login-overlay').classList.remove('visible'));
-
-    attachConcertListeners();
-  }
-
-  // ── Playlist search ──────────────────────────────────────────
-  function startSearch() {
-    const url = $id('playlist-url').value.trim();
-    if (!url) return;
-    resetResultsUI();
-    setSearchBtn(true);
-    $id('liked-btn').disabled = true;
-    if (es) es.close();
-    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url));
-    attachConcertListeners();
-  }
-
-  function finishSearch() {
-    $id('progress-section').style.display = 'none';
-    $id('liked-btn').disabled = false;
-    setSearchBtn(false);
-    if (es) es.close();
-  }
-
-  // ── Concert cards ────────────────────────────────────────────
-  function appendCard(data) {
-    const rows = data.concerts.map(c => {
-      const timeStr  = c.time    ? ' &bull; ' + esc(c.time)  : '';
-      const addrStr  = c.address ? ' &mdash; ' + esc(c.address) : '';
-      const cityBadge = c.city
-        ? '<span class="city-badge">' + esc(c.city) + '</span> '
-        : '';
-
-      return '<li class="concert-row">' +
-        '<div class="concert-info">' +
-          '<div class="concert-title">' + cityBadge + esc(c.event_name || '') + '</div>' +
-          '<div class="concert-meta">' +
-            '<span>&#128197; ' + esc(c.date || '') + timeStr + '</span>' +
-            '<span>&#128205; ' + esc(c.venue || '') + addrStr + '</span>' +
-          '</div>' +
-        '</div>' +
-        '<a class="tix-btn" href="' + esc(c.tickets_url || '#') + '" target="_blank" rel="noopener">Get Tickets</a>' +
-        '</li>';
-    }).join('');
-
-    const spotifyLink = data.spotify_url
-      ? ' <a href="' + esc(data.spotify_url) + '" target="_blank" rel="noopener">Open in Spotify</a>'
-      : '';
-
-    const count = data.concerts.length;
-    const card  = document.createElement('div');
-    card.className = 'artist-card';
-    card.innerHTML =
-      '<div class="artist-header">' +
-        '<div class="artist-name">' + esc(data.artist) + spotifyLink + '</div>' +
-        '<span class="show-badge">' + count + ' show' + (count !== 1 ? 's' : '') + '</span>' +
-      '</div>' +
-      '<ul class="concert-list">' + rows + '</ul>';
-
-    $id('results').appendChild(card);
-  }
-
-  // ── Download TXT ─────────────────────────────────────────────
-  function downloadTxt() {
-    const flat = allResults
-      .flatMap(r => r.concerts.map(c => ({ artist: r.artist, ...c })))
-      .sort((a, b) => (a.date_raw || '').localeCompare(b.date_raw || ''));
-
-    const now   = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    const lines = [
-      'UPCOMING CONCERTS — ' + playlistLabel,
-      'Cities: New York City | Prince Edward Island | Washington DC',
-      'Generated: ' + now,
-      '='.repeat(60),
-      '',
-    ];
-
-    flat.forEach(c => {
-      lines.push(c.artist.toUpperCase());
-      lines.push('  Event : ' + (c.event_name || ''));
-      lines.push('  Date  : ' + (c.date || 'TBA') + (c.time ? '  ' + c.time : ''));
-      lines.push('  City  : ' + (c.city || ''));
-      lines.push('  Venue : ' + (c.venue || ''));
-      lines.push('  Link  : ' + (c.tickets_url || ''));
-      lines.push('-'.repeat(60));
-    });
-
-    const a  = document.createElement('a');
-    a.href   = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }));
-    a.download = 'concerts.txt';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  // ── Init ─────────────────────────────────────────────────────
-  window.addEventListener('DOMContentLoaded', () => {
-    loadRecipients();
-    loadSmtpConfig();
-    loadCarriers();
-  });
-</script>
-
+        // Update times every second
+        setInterval(updateTimes, 1000);
+    </script>
 </body>
 </html>
