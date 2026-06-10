@@ -152,6 +152,25 @@ def sse(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
+def _friendly_error(exc: Exception) -> str:
+    """
+    Turn a raw exception into a short, user-facing message.
+
+    Selenium/chromedriver errors often come with multi-line stack traces
+    embedded in the message (e.g. "no such window: target window already
+    closed\nfrom unknown error...\nStacktrace:\n0  chromedriver ..."). Strip
+    those down to something readable, and recognise the common "the user
+    closed the browser window mid-login" case specifically.
+    """
+    text = str(exc)
+    first_line = text.splitlines()[0] if text else type(exc).__name__
+    if "no such window" in text or "target window already closed" in text:
+        return "The browser window was closed before login finished — click 'Log in with Spotify' to try again."
+    if "chrome not reachable" in text or "disconnected" in text.lower():
+        return "Lost connection to the browser window — click 'Log in with Spotify' to try again."
+    return first_line
+
+
 # Selenium — shared driver factory + scroll helper
 
 # Spotify injects artist links inside these containers (most specific first)
@@ -640,7 +659,7 @@ def concerts_stream():
 
         except Exception as e:
             log.error("Unexpected error in concerts_stream: %s", e)
-            yield sse("error", {"message": str(e)})
+            yield sse("error", {"message": _friendly_error(e)})
 
     return _sse_response(generate())
 
@@ -738,7 +757,7 @@ def liked_songs_stream():
 
         except Exception as e:
             log.error("Unexpected error in liked_songs_stream: %s", e)
-            yield sse("error", {"message": str(e)})
+            yield sse("error", {"message": _friendly_error(e)})
 
     return _sse_response(generate())
 
@@ -809,7 +828,7 @@ def spotify_playlists_stream():
 
         except Exception as e:
             log.error("Unexpected error in spotify_playlists_stream: %s", e)
-            yield sse("error", {"message": str(e)})
+            yield sse("error", {"message": _friendly_error(e)})
         finally:
             if driver:
                 try:
@@ -888,7 +907,7 @@ def scan_multi_stream():
 
         except Exception as e:
             log.error("Unexpected error in scan_multi_stream: %s", e)
-            yield sse("error", {"message": str(e)})
+            yield sse("error", {"message": _friendly_error(e)})
 
     return _sse_response(generate())
 
