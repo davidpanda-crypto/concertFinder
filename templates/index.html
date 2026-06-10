@@ -417,8 +417,14 @@
       font-weight: 600;
       transition: border-color 0.15s, opacity 0.15s;
     }
-    .playlist-tile:hover:not(:disabled) { border-color: var(--accent); }
-    .playlist-tile:disabled { opacity: 0.45; cursor: not-allowed; }
+    .playlist-tile:hover:not(.disabled) { border-color: var(--accent); }
+    .playlist-tile.disabled { opacity: 0.45; cursor: not-allowed; }
+    .playlist-tile input[type="checkbox"] {
+      width: 17px; height: 17px;
+      flex-shrink: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
     .playlist-tile img,
     .playlist-tile .tile-fallback {
       width: 40px; height: 40px;
@@ -429,8 +435,15 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 1.1rem;
     }
+    .playlist-tile span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .playlist-tile.liked-tile { border-color: rgba(29,185,84,0.35); }
     .playlist-tile.liked-tile .tile-fallback { color: #1DB954; }
+
+    #scan-btn { margin-top: 0.85rem; width: 100%; }
 
     /* Login overlay */
     #login-overlay {
@@ -499,6 +512,7 @@
         <button class="btn-link" id="refresh-btn" onclick="startSpotifyLogin()">Refresh</button>
       </div>
       <div class="playlist-list" id="playlist-list"></div>
+      <button class="btn-primary" id="scan-btn" onclick="startMultiScan()" disabled>Scan Selected</button>
     </div>
 
     <div id="playlist-pill">
@@ -625,12 +639,26 @@
 
   function $id(id) { return document.getElementById(id); }
 
+  let scanInProgress = false;
+
   // Disables the connect/refresh buttons and every playlist tile while a
   // login or search is in progress.
   function setControlsDisabled(disabled) {
+    scanInProgress = disabled;
     $id('connect-btn').disabled = disabled;
     $id('refresh-btn').disabled = disabled;
-    document.querySelectorAll('.playlist-tile').forEach(t => t.disabled = disabled);
+    document.querySelectorAll('#playlist-list input[type="checkbox"]').forEach(cb => cb.disabled = disabled);
+    document.querySelectorAll('.playlist-tile').forEach(t => t.classList.toggle('disabled', disabled));
+    updateScanBtn();
+  }
+
+  // Enables/disables the "Scan Selected" button and updates its label
+  // based on how many playlist tiles are checked.
+  function updateScanBtn() {
+    const checked = document.querySelectorAll('#playlist-list input[type="checkbox"]:checked').length;
+    const btn = $id('scan-btn');
+    btn.disabled = scanInProgress || checked === 0;
+    btn.textContent = checked > 0 ? 'Scan ' + checked + ' Selected' : 'Scan Selected';
   }
 
   function setStatusText(msg) {
@@ -888,13 +916,20 @@
     };
   }
 
-  // Liked Songs
-  function startLikedSongs() {
+  // Scan every checked playlist (and/or Liked Songs) together as one combined search.
+  function startMultiScan() {
+    const checked = Array.from(
+      document.querySelectorAll('#playlist-list input[type="checkbox"]:checked')
+    ).map(cb => cb.value);
+
+    if (checked.length === 0) return;
+
     resetResultsUI();
     setControlsDisabled(true);
 
     if (es) es.close();
-    es = new EventSource('/api/liked-songs');
+    const sources = checked.map(v => encodeURIComponent(v)).join('|');
+    es = new EventSource('/api/scan-multi?sources=' + sources);
 
     // Show login overlay when server says browser window opened
     es.addEventListener('login_required', e => {
@@ -905,17 +940,6 @@
     // Hide login overlay once we're past the login step
     es.addEventListener('playlist_info', () => $id('login-overlay').classList.remove('visible'));
 
-    attachConcertListeners();
-  }
-
-  // Playlist search — pass authed=true for playlists from the user's own library
-  function startSearch(url, authed) {
-    if (!url) return;
-    resetResultsUI();
-    setControlsDisabled(true);
-    if (es) es.close();
-    const authParam = authed ? '&authed=1' : '';
-    es = new EventSource('/api/concerts?playlist_url=' + encodeURIComponent(url) + authParam);
     attachConcertListeners();
   }
 
@@ -977,15 +1001,25 @@
     const list = $id('playlist-list');
     list.innerHTML = '';
 
-    const likedTile = document.createElement('button');
+    const likedTile = document.createElement('label');
     likedTile.className = 'playlist-tile liked-tile';
-    likedTile.innerHTML = '<div class="tile-fallback">&#9829;</div><span>Liked Songs</span>';
-    likedTile.onclick = startLikedSongs;
+    const likedCb = document.createElement('input');
+    likedCb.type = 'checkbox';
+    likedCb.value = 'liked';
+    likedCb.addEventListener('change', updateScanBtn);
+    likedTile.appendChild(likedCb);
+    likedTile.insertAdjacentHTML('beforeend', '<div class="tile-fallback">&#9829;</div><span>Liked Songs</span>');
     list.appendChild(likedTile);
 
     playlists.forEach(p => {
-      const tile = document.createElement('button');
+      const tile = document.createElement('label');
       tile.className = 'playlist-tile';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = p.url;
+      cb.addEventListener('change', updateScanBtn);
+      tile.appendChild(cb);
 
       if (p.image) {
         const img = document.createElement('img');
@@ -1008,12 +1042,12 @@
       const label = document.createElement('span');
       label.textContent = p.name;
       tile.appendChild(label);
-      tile.onclick = () => startSearch(p.url, true);
       list.appendChild(tile);
     });
 
     $id('connect-btn').textContent = '♫ Reconnect Spotify';
     $id('playlist-picker').style.display = 'block';
+    updateScanBtn();
   }
 
   // Concert cards — Bandsintown-style weekly groups

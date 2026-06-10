@@ -586,54 +586,81 @@ _LOGIN_URL = (
 )
 
 
+def _harvest_liked_songs():
+    """
+    Generator: opens a visible Spotify browser window (handling login if
+    needed) and harvests the Liked Songs artist list with live progress.
+
+    Yields SSE strings ("status"/"login_required") and returns
+    {artist_name: spotify_url} via StopIteration.value.
+    Raises RuntimeError with a user-facing message on failure.
+    """
+    SPOTIFY_PROFILE.mkdir(parents=True, exist_ok=True)
+    driver = None
+    try:
+        yield sse("status", {"message": "Opening Spotify in a browser window..."})
+        try:
+            driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+        except Exception as exc:
+            log.error("Could not open visible browser for Liked Songs: %s", exc)
+            raise RuntimeError(
+                "Liked Songs needs a desktop browser window and only works "
+                "when running this app on your own computer — not in the cloud."
+            )
+
+        driver.get(_LIKED_SONGS_URL)
+        time.sleep(PAGE_SETTLE_S)
+
+        if "collection/tracks" not in driver.current_url:
+            driver.get(_LOGIN_URL)
+            yield sse("login_required", {
+                "message": "Please log into Spotify in the browser window. "
+                           "Once logged in you will be taken straight to your Liked Songs."
+            })
+            try:
+                WebDriverWait(driver, LOGIN_TIMEOUT_S).until(
+                    lambda d: "collection/tracks" in d.current_url
+                )
+                time.sleep(POST_LOGIN_S)
+            except Exception:
+                raise RuntimeError("Login timed out — please try again.")
+
+        yield sse("status", {"message": "Reading your Liked Songs..."})
+        try:
+            WebDriverWait(driver, ARTIST_WAIT_S).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
+            )
+        except Exception:
+            log.debug("Timed out waiting for artist links in Liked Songs")
+
+        artists_map = yield from _harvest_with_progress(
+            driver, "Reading your Liked Songs", max_scrolls=MAX_SCROLLS_LONG
+        )
+        return artists_map
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+
 @app.route("/api/liked-songs")
 def liked_songs_stream():
-    SPOTIFY_PROFILE.mkdir(parents=True, exist_ok=True)
-
     def generate():
-        driver = None
         try:
-            yield sse("status", {"message": "Opening Spotify in a browser window..."})
             try:
-                driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
-            except Exception as exc:
-                log.error("Could not open visible browser for Liked Songs: %s", exc)
-                yield sse("error", {
-                    "message": "Liked Songs needs a desktop browser window and only works "
-                               "when running this app on your own computer — not in the cloud."
-                })
+                gen = _harvest_liked_songs()
+                while True:
+                    try:
+                        yield next(gen)
+                    except StopIteration as stop:
+                        artists_map = stop.value
+                        break
+            except RuntimeError as e:
+                yield sse("error", {"message": str(e)})
                 return
-            driver.get(_LIKED_SONGS_URL)
-            time.sleep(PAGE_SETTLE_S)
-
-            if "collection/tracks" not in driver.current_url:
-                driver.get(_LOGIN_URL)
-                yield sse("login_required", {
-                    "message": "Please log into Spotify in the browser window. "
-                               "Once logged in you will be taken straight to your Liked Songs."
-                })
-                try:
-                    WebDriverWait(driver, LOGIN_TIMEOUT_S).until(
-                        lambda d: "collection/tracks" in d.current_url
-                    )
-                    time.sleep(POST_LOGIN_S)
-                except Exception:
-                    yield sse("error", {"message": "Login timed out — please try again."})
-                    return
-
-            yield sse("status", {"message": "Reading your Liked Songs..."})
-            try:
-                WebDriverWait(driver, ARTIST_WAIT_S).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
-                )
-            except Exception:
-                log.debug("Timed out waiting for artist links in Liked Songs")
-
-            artists_map = yield from _harvest_with_progress(
-                driver, "Reading your Liked Songs", max_scrolls=MAX_SCROLLS_LONG
-            )
-            driver.quit()
-            driver = None
 
             if not artists_map:
                 yield sse("error", {"message": "No artists found — are you logged into Spotify?"})
@@ -644,12 +671,6 @@ def liked_songs_stream():
         except Exception as e:
             log.error("Unexpected error in liked_songs_stream: %s", e)
             yield sse("error", {"message": str(e)})
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
 
     return _sse_response(generate())
 
@@ -727,6 +748,79 @@ def spotify_playlists_stream():
                     driver.quit()
                 except Exception:
                     pass
+
+    return _sse_response(generate())
+
+
+# Routes — /api/scan-multi
+
+@app.route("/api/scan-multi")
+def scan_multi_stream():
+    """
+    Scan several sources at once and combine their artists into a single
+    concert search. `sources` is a "|"-separated list of URL-encoded values,
+    where each value is either "liked" (for Liked Songs) or a Spotify
+    playlist URL.
+    """
+    raw = request.args.get("sources", "")
+    sources = [urllib.parse.unquote(s) for s in raw.split("|") if s]
+
+    if not sources:
+        def empty():
+            yield sse("error", {"message": "No playlists selected."})
+        return _sse_response(empty())
+
+    def generate():
+        combined_artists: dict = {}
+        names: list = []
+        image = ""
+
+        try:
+            for source in sources:
+                try:
+                    if source == "liked":
+                        gen = _harvest_liked_songs()
+                        while True:
+                            try:
+                                yield next(gen)
+                            except StopIteration as stop:
+                                combined_artists.update(stop.value)
+                                names.append("Liked Songs")
+                                break
+                    else:
+                        gen = scrape_spotify_playlist(source, authed=True)
+                        while True:
+                            try:
+                                yield next(gen)
+                            except StopIteration as stop:
+                                playlist_name, playlist_image, artists = stop.value
+                                combined_artists.update(artists)
+                                names.append(playlist_name)
+                                if not image and playlist_image:
+                                    image = playlist_image
+                                break
+                except (RuntimeError, ValueError) as e:
+                    yield sse("error", {"message": str(e)})
+                    return
+                except Exception as e:
+                    log.error("Scan failed for source %s: %s", source, e)
+                    yield sse("error", {"message": f"Could not scan a selected playlist: {e}"})
+                    return
+
+            if not combined_artists:
+                yield sse("error", {"message": "No artists found in the selected playlists."})
+                return
+
+            if len(names) <= 3:
+                label = ", ".join(names)
+            else:
+                label = f"{names[0]} + {len(names) - 1} more"
+
+            yield from _stream_concerts(combined_artists, label, image)
+
+        except Exception as e:
+            log.error("Unexpected error in scan_multi_stream: %s", e)
+            yield sse("error", {"message": str(e)})
 
     return _sse_response(generate())
 
