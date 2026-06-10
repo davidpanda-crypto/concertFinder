@@ -150,6 +150,20 @@ _ARTIST_SELECTORS = [
     "a[href*='/artist/']",
 ]
 
+# The scrollable tracklist itself — used to scope artist-link searches so
+# unrelated artist links elsewhere on the page (recommended tracks, the
+# now-playing bar, "fans also like" sidebars, etc.) are never picked up.
+_TRACKLIST_CONTAINER_SELECTORS = [
+    "[data-testid='playlist-tracklist']",
+    "[data-testid='track-list']",
+    "section[data-testid='playlist-page'] [role='grid']",
+    "[role='grid']",
+]
+
+# Names that show up as "artist" links but aren't real performers, so we
+# never bother searching Last.fm for them.
+_NON_ARTIST_NAMES = {"various artists"}
+
 
 def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> webdriver.Chrome:
     """
@@ -178,15 +192,40 @@ def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> w
 
 
 def _harvest_artists(driver) -> dict:
-    """Return {name: spotify_url} for every artist link currently in the DOM."""
+    """
+    Return {name: spotify_url} for every artist link in the playlist's
+    tracklist that's currently in the DOM.
+
+    The search is scoped to the tracklist container whenever we can find
+    one, so artist links from unrelated parts of the page (recommendations,
+    the now-playing bar, related-artist sidebars, etc.) never leak into the
+    results — only artists actually in this playlist/library are returned.
+    """
+    scope = driver
+    for sel in _TRACKLIST_CONTAINER_SELECTORS:
+        try:
+            container = driver.find_element(By.CSS_SELECTOR, sel)
+        except Exception:
+            container = None
+        if container:
+            scope = container
+            break
+
     for selector in _ARTIST_SELECTORS:
-        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        try:
+            elements = scope.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            elements = []
         if elements:
             artists = {}
             for a in elements:
                 name = (a.text or "").strip()
                 href = (a.get_attribute("href") or "")
-                if name and "/artist/" in href and name not in artists:
+                if not name or "/artist/" not in href:
+                    continue
+                if name.lower() in _NON_ARTIST_NAMES:
+                    continue
+                if name not in artists:
                     artists[name] = href
             return artists
     return {}
