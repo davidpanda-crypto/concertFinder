@@ -542,6 +542,17 @@
     return d.innerHTML;
   }
 
+  // Only allow http/https links — blocks javascript:, data:, etc.
+  function safeUrl(url) {
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return esc(url);
+      }
+    } catch (e) { /* invalid URL */ }
+    return '#';
+  }
+
   function $id(id) { return document.getElementById(id); }
 
   function setSearchBtn(loading) {
@@ -703,7 +714,7 @@
         const ok  = data.sent.length;
         const bad = data.errors.length;
         alert('Sent to ' + ok + ' recipient' + (ok !== 1 ? 's' : '') +
-          (bad ? '\nFailed: ' + data.errors.map(e => e.email).join(', ') : ''));
+          (bad ? '\nFailed: ' + data.errors.map(e => e.to).join(', ') : ''));
       }
     } catch (e) {
       alert('Send failed: ' + e.message);
@@ -745,7 +756,7 @@
 
     es.addEventListener('progress', e => {
       const { current, total, artist } = JSON.parse(e.data);
-      const pct = Math.round((current / total) * 100);
+      const pct = total > 0 ? Math.round((current / total) * 100) : 0;
       $id('bar-fill').style.width  = pct + '%';
       $id('bar-label').textContent = current + ' / ' + total;
       setStatusText('Checking: ' + artist);
@@ -768,7 +779,12 @@
       $id('dl-btn').style.display = artists_with_shows > 0 ? '' : 'none';
       refreshSendBtn();
 
-      if (artists_with_shows > 0) {
+      if (total_artists === 0) {
+        $id('summary').textContent = 'No artists were found in that playlist.';
+        $id('results').innerHTML =
+          '<div class="empty-state"><h3>No artists found</h3>' +
+          '<p>Double-check the playlist URL and make sure it\'s public.</p></div>';
+      } else if (artists_with_shows > 0) {
         $id('summary').innerHTML =
           'Found <strong>' + artists_with_shows + '</strong> artist' +
           (artists_with_shows !== 1 ? 's' : '') +
@@ -858,12 +874,12 @@
             '<span>&#128205; ' + esc(c.venue || '') + addrStr + '</span>' +
           '</div>' +
         '</div>' +
-        '<a class="tix-btn" href="' + esc(c.tickets_url || '#') + '" target="_blank" rel="noopener">Get Tickets</a>' +
+        '<a class="tix-btn" href="' + safeUrl(c.tickets_url || '#') + '" target="_blank" rel="noopener">Get Tickets</a>' +
         '</li>';
     }).join('');
 
     const spotifyLink = data.spotify_url
-      ? ' <a href="' + esc(data.spotify_url) + '" target="_blank" rel="noopener">Open in Spotify</a>'
+      ? ' <a href="' + safeUrl(data.spotify_url) + '" target="_blank" rel="noopener">Open in Spotify</a>'
       : '';
 
     const count = data.concerts.length;

@@ -462,7 +462,15 @@ def liked_songs_stream():
         driver = None
         try:
             yield sse("status", {"message": "Opening Spotify in a browser window..."})
-            driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+            try:
+                driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+            except Exception as exc:
+                log.error("Could not open visible browser for Liked Songs: %s", exc)
+                yield sse("error", {
+                    "message": "Liked Songs needs a desktop browser window and only works "
+                               "when running this app on your own computer — not in the cloud."
+                })
+                return
             driver.get(_LIKED_SONGS_URL)
             time.sleep(PAGE_SETTLE_S)
 
