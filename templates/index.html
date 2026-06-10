@@ -264,54 +264,65 @@
     }
     .carrier-select:focus { border-color: var(--accent); }
 
-    /* Results */
-    #results { display: flex; flex-direction: column; gap: 1.25rem; }
+    /* Results — Bandsintown-style date groups */
+    #results { display: flex; flex-direction: column; }
 
-    .artist-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      animation: pop-in 0.3s ease both;
-    }
     @keyframes pop-in {
       from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
 
-    .artist-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0.9rem 1.2rem;
+    .date-heading {
+      font-size: 0.75rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      padding: 1.1rem 0 0.5rem;
       border-bottom: 1px solid var(--border);
-      gap: 0.75rem;
+      margin-bottom: 0.75rem;
     }
-    .artist-name { font-size: 1rem; font-weight: 700; }
-    .artist-name a {
-      color: #1DB954; font-size: 0.78rem; font-weight: 500;
-      text-decoration: none; margin-left: 0.6rem; vertical-align: middle;
-    }
-    .artist-name a:hover { text-decoration: underline; }
-    .show-badge {
-      font-size: 0.72rem; font-weight: 600; color: var(--muted);
-      background: var(--surface2); padding: 0.2rem 0.65rem;
-      border-radius: 99px; white-space: nowrap; flex-shrink: 0;
+    .date-group:first-child .date-heading { padding-top: 0; }
+
+    .show-card {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.75rem 1.1rem;
+      margin-bottom: 0.6rem;
+      animation: pop-in 0.3s ease both;
     }
 
-    .concert-list { list-style: none; }
-    .concert-row {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 1rem; padding: 0.9rem 1.2rem;
-      border-bottom: 1px solid var(--border);
+    .show-img, .show-img-fallback {
+      width: 56px; height: 56px;
+      border-radius: 10px;
+      flex-shrink: 0;
+      object-fit: cover;
+      background: var(--surface2);
     }
-    .concert-row:last-child { border-bottom: none; }
+    .show-img-fallback {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem;
+    }
 
-    .concert-info { min-width: 0; }
-    .concert-title {
-      font-size: 0.9rem; font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      margin-bottom: 0.3rem;
+    .show-info { min-width: 0; flex: 1; }
+    .show-artist {
+      font-size: 0.95rem; font-weight: 700;
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      margin-bottom: 0.25rem;
     }
-    .concert-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; font-size: 0.78rem; color: var(--muted); }
+    .spotify-link {
+      color: #1DB954; font-size: 0.75rem; font-weight: 500;
+      text-decoration: none;
+    }
+    .spotify-link:hover { text-decoration: underline; }
+    .show-meta {
+      display: flex; flex-wrap: wrap; align-items: center;
+      gap: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--muted);
+    }
 
     .city-badge {
       display: inline-block; font-size: 0.68rem; font-weight: 700;
@@ -325,7 +336,7 @@
       display: inline-block;
       background: linear-gradient(120deg, var(--accent), var(--accent2));
       color: #fff; text-decoration: none;
-      padding: 0.45rem 1rem; border-radius: 6px;
+      padding: 0.5rem 1.1rem; border-radius: 6px;
       font-size: 0.78rem; font-weight: 700; white-space: nowrap;
       transition: opacity 0.15s;
     }
@@ -402,7 +413,8 @@
     @media (max-width: 540px) {
       header h1 { font-size: 1.6rem; }
       .input-row, .add-row, .smtp-grid { flex-direction: column; }
-      .concert-row { flex-wrap: wrap; }
+      .show-card { flex-wrap: wrap; }
+      .tix-btn { margin-left: auto; }
     }
   </style>
 </head>
@@ -763,9 +775,7 @@
     });
 
     es.addEventListener('result', e => {
-      const data = JSON.parse(e.data);
-      allResults.push(data);
-      appendCard(data);
+      allResults.push(JSON.parse(e.data));
     });
 
     es.addEventListener('done', e => {
@@ -785,10 +795,13 @@
           '<div class="empty-state"><h3>No artists found</h3>' +
           '<p>Double-check the playlist URL and make sure it\'s public.</p></div>';
       } else if (artists_with_shows > 0) {
+        const showCount = allResults.reduce((n, r) => n + r.concerts.length, 0);
         $id('summary').innerHTML =
-          'Found <strong>' + artists_with_shows + '</strong> artist' +
+          'Found <strong>' + showCount + '</strong> show' + (showCount !== 1 ? 's' : '') +
+          ' from <strong>' + artists_with_shows + '</strong> artist' +
           (artists_with_shows !== 1 ? 's' : '') +
-          ' with upcoming shows out of ' + total_artists + ' in the playlist.';
+          ' out of ' + total_artists + ' in the playlist.';
+        renderResults();
       } else {
         $id('summary').textContent =
           'No upcoming shows found in any watched city for the ' + total_artists + ' artists.';
@@ -857,42 +870,94 @@
     if (es) es.close();
   }
 
-  // Concert cards
-  function appendCard(data) {
-    const rows = data.concerts.map(c => {
-      const timeStr  = c.time    ? ' &bull; ' + esc(c.time)  : '';
-      const addrStr  = c.address ? ' &mdash; ' + esc(c.address) : '';
-      const cityBadge = c.city
-        ? '<span class="city-badge">' + esc(c.city) + '</span> '
-        : '';
+  // Concert cards — Bandsintown-style date groups
+  function renderResults() {
+    const flat = allResults
+      .flatMap(r => r.concerts.map(c => ({ artist: r.artist, spotify_url: r.spotify_url, image: r.image, ...c })))
+      .sort((a, b) => (a.date_raw || '9999').localeCompare(b.date_raw || '9999'));
 
-      return '<li class="concert-row">' +
-        '<div class="concert-info">' +
-          '<div class="concert-title">' + cityBadge + esc(c.event_name || '') + '</div>' +
-          '<div class="concert-meta">' +
-            '<span>&#128197; ' + esc(c.date || '') + timeStr + '</span>' +
-            '<span>&#128205; ' + esc(c.venue || '') + addrStr + '</span>' +
-          '</div>' +
-        '</div>' +
-        '<a class="tix-btn" href="' + safeUrl(c.tickets_url || '#') + '" target="_blank" rel="noopener">Get Tickets</a>' +
-        '</li>';
-    }).join('');
+    const container = $id('results');
+    container.innerHTML = '';
 
-    const spotifyLink = data.spotify_url
-      ? ' <a href="' + safeUrl(data.spotify_url) + '" target="_blank" rel="noopener">Open in Spotify</a>'
+    let lastGroup = null;
+    let groupEl = null;
+
+    flat.forEach(c => {
+      const groupKey = c.date_raw ? c.date_raw.slice(0, 10) : 'tba';
+      if (groupKey !== lastGroup) {
+        lastGroup = groupKey;
+        const heading = document.createElement('div');
+        heading.className = 'date-heading';
+        heading.textContent = groupKey === 'tba' ? 'Date TBA' : formatGroupDate(c.date_raw);
+        container.appendChild(heading);
+        groupEl = document.createElement('div');
+        groupEl.className = 'date-group';
+        container.appendChild(groupEl);
+      }
+      groupEl.appendChild(buildShowCard(c));
+    });
+  }
+
+  function formatGroupDate(dateRaw) {
+    try {
+      const d = new Date(dateRaw);
+      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
+    } catch (e) {
+      return 'DATE TBA';
+    }
+  }
+
+  function buildShowCard(c) {
+    const card = document.createElement('div');
+    card.className = 'show-card';
+
+    if (c.image) {
+      const img = document.createElement('img');
+      img.className = 'show-img';
+      img.alt = '';
+      img.src = safeUrl(c.image);
+      img.onerror = function () {
+        const fallback = document.createElement('div');
+        fallback.className = 'show-img show-img-fallback';
+        fallback.textContent = '\u{1F3B5}';
+        img.replaceWith(fallback);
+      };
+      card.appendChild(img);
+    } else {
+      const fallback = document.createElement('div');
+      fallback.className = 'show-img show-img-fallback';
+      fallback.textContent = '\u{1F3B5}';
+      card.appendChild(fallback);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'show-info';
+
+    const cityBadge = c.city ? '<span class="city-badge">' + esc(c.city) + '</span>' : '';
+    const spotifyLink = c.spotify_url
+      ? ' <a class="spotify-link" href="' + safeUrl(c.spotify_url) + '" target="_blank" rel="noopener">Spotify</a>'
       : '';
+    const timeStr = c.time ? '<span>' + esc(c.time) + '</span>' : '';
+    const eventStr = (c.event_name && c.event_name !== c.artist)
+      ? '<span>' + esc(c.event_name) + '</span>' : '';
 
-    const count = data.concerts.length;
-    const card  = document.createElement('div');
-    card.className = 'artist-card';
-    card.innerHTML =
-      '<div class="artist-header">' +
-        '<div class="artist-name">' + esc(data.artist) + spotifyLink + '</div>' +
-        '<span class="show-badge">' + count + ' show' + (count !== 1 ? 's' : '') + '</span>' +
-      '</div>' +
-      '<ul class="concert-list">' + rows + '</ul>';
+    info.innerHTML =
+      '<div class="show-artist">' + esc(c.artist) + spotifyLink + '</div>' +
+      '<div class="show-meta">' + cityBadge +
+        '<span>' + esc(c.venue || '') + '</span>' + timeStr + eventStr +
+      '</div>';
 
-    $id('results').appendChild(card);
+    card.appendChild(info);
+
+    const tix = document.createElement('a');
+    tix.className = 'tix-btn';
+    tix.href = safeUrl(c.tickets_url || '#');
+    tix.target = '_blank';
+    tix.rel = 'noopener';
+    tix.textContent = 'Get Tickets';
+    card.appendChild(tix);
+
+    return card;
   }
 
   // Download TXT

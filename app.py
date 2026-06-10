@@ -51,11 +51,11 @@ log = logging.getLogger(__name__)
 # Constants
 
 # Scroll behaviour
-SCROLL_PX          = 600     # pixels per scroll step
-SCROLL_DELAY_S     = 0.7     # seconds between scroll steps
-STABLE_ROUNDS      = 4       # consecutive unchanged harvests before stopping
+SCROLL_PX          = 500     # pixels per scroll step
+SCROLL_DELAY_S     = 0.8     # seconds between scroll steps
+STABLE_ROUNDS      = 6       # consecutive unchanged harvests before stopping
 MAX_SCROLLS_SHORT  = 80      # playlist scrape cap
-MAX_SCROLLS_LONG   = 300     # liked-songs scrape cap (larger libraries)
+MAX_SCROLLS_LONG   = 600     # liked-songs scrape cap (larger libraries)
 
 # Timing
 PAGE_SETTLE_S      = 3       # wait after initial navigation
@@ -192,24 +192,44 @@ def _harvest_artists(driver) -> dict:
     return {}
 
 
+# Scrolls the actual scrollable list container when present (Spotify renders
+# Liked Songs / playlists inside a custom OverlayScrollbars viewport, not
+# the window) and falls back to window scrolling otherwise. Returns the
+# container's scrollHeight so callers can detect when more rows have
+# lazy-loaded below the fold.
+_SCROLL_JS = """
+const px = arguments[0];
+const el = document.querySelector('[data-overlayscrollbars-viewport]')
+        || document.querySelector('.main-view-container__scroll-node')
+        || document.scrollingElement;
+el.scrollBy(0, px);
+return el.scrollHeight;
+"""
+
+
 def _scroll_and_harvest(driver, max_scrolls: int = MAX_SCROLLS_LONG) -> dict:
     """
-    Scroll the page in SCROLL_PX steps, harvesting artist links after each step.
-    Stops early once the count is stable for STABLE_ROUNDS consecutive rounds.
+    Scroll the list in SCROLL_PX steps, harvesting artist links after each step.
+    Stops once both the artist count AND the scroll height are stable for
+    STABLE_ROUNDS consecutive rounds — checking scroll height too avoids
+    quitting early during a brief lazy-load pause on large libraries.
     """
     all_artists: dict = {}
-    last_count = stable_rounds = 0
+    last_count = last_height = stable_rounds = 0
 
     for _ in range(max_scrolls):
         all_artists.update(_harvest_artists(driver))
-        if len(all_artists) == last_count:
+        height = driver.execute_script(_SCROLL_JS, SCROLL_PX)
+
+        if len(all_artists) == last_count and height == last_height:
             stable_rounds += 1
             if stable_rounds >= STABLE_ROUNDS:
                 break
         else:
             stable_rounds = 0
-            last_count = len(all_artists)
-        driver.execute_script(f"window.scrollBy(0, {SCROLL_PX})")
+            last_count  = len(all_artists)
+            last_height = height
+
         time.sleep(SCROLL_DELAY_S)
 
     all_artists.update(_harvest_artists(driver))  # final sweep after scroll settles
@@ -376,6 +396,24 @@ def find_concerts(artist_name: str) -> list:
 
 # Concert stream helpers — shared by /api/concerts and /api/liked-songs
 
+_OG_IMAGE_RE = re.compile(r'<meta property="og:image" content="([^"]+)"')
+
+
+def _artist_image(spotify_url: str) -> str:
+    """Best-effort fetch of an artist photo via the og:image tag on their Spotify page."""
+    if not spotify_url:
+        return ""
+    try:
+        resp = requests.get(spotify_url, headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S)
+        if resp.status_code == 200:
+            m = _OG_IMAGE_RE.search(resp.text)
+            if m:
+                return m.group(1)
+    except requests.RequestException:
+        pass
+    return ""
+
+
 def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str):
     """
     Generator that yields SSE events for the concert-search phase.
@@ -392,9 +430,11 @@ def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str)
         concerts = find_concerts(artist)
         if concerts:
             found_count += 1
+            spotify_url = artists_map.get(artist, "")
             yield sse("result", {
                 "artist":      artist,
-                "spotify_url": artists_map.get(artist, ""),
+                "spotify_url": spotify_url,
+                "image":       _artist_image(spotify_url),
                 "concerts":    concerts,
             })
         time.sleep(CONCERT_DELAY_S)
