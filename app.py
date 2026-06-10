@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 SCROLL_PX          = 500     # pixels per scroll step
 SCROLL_DELAY_S     = 0.8     # seconds between scroll steps
 STABLE_ROUNDS      = 8       # consecutive unchanged harvests before stopping
-MAX_SCROLLS_SHORT  = 80       # playlist scrape cap
+MAX_SCROLLS_SHORT  = 1200     # playlist scrape cap (very large playlists)
 MAX_SCROLLS_LONG   = 1200     # liked-songs scrape cap (very large libraries)
 
 # Timing
