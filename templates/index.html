@@ -856,13 +856,14 @@
     const input = $id('new-email-input');
     const email = input.value.trim();
     if (!email) return;
-    const emails = await fetch('/api/emails', {
+    const result = await fetch('/api/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     }).then(r => r.json());
+    if (result.error) { alert(result.error); return; }
     input.value = '';
-    renderRecipients(emails);
+    renderRecipients(result);
   }
 
   async function removeEmail(email) {
@@ -1149,7 +1150,10 @@
       list.appendChild(tile);
     });
 
-    $id('connect-btn').textContent = '♫ Reconnect Spotify';
+    // Once connected, the playlist picker's own "Refresh" button covers
+    // reconnecting, so hide the original connect prompt to avoid showing
+    // both "Log in with Spotify to scan..." and the picker at once.
+    $id('connect-section').style.display = 'none';
     $id('playlist-picker').style.display = 'block';
     updateScanBtn();
   }

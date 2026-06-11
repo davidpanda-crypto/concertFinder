@@ -127,7 +127,7 @@ WATCH_CITIES = [
     },
     {
         "label": "Washington DC",
-        "keywords": ["washington dc", "washington, d.c.", "washington", "arlington", "alexandria"],
+        "keywords": ["washington dc", "arlington", "alexandria"],
         "country": "united states",
     },
 ]
@@ -561,8 +561,18 @@ def _city_for_address(address: str) -> Optional[str]:
     (so e.g. "Brisbane, Queensland, Australia" can't match "queens"), and
     keywords are matched as whole words (so "queens" doesn't match inside
     "queensland", and "pei" doesn't match inside an unrelated word).
+
+    Commas and periods are stripped first so "Washington, D.C., United
+    States" and "Washington, DC, United States" both normalise to
+    "washington dc united states" and match the "washington dc" keyword
+    consistently (the punctuation otherwise breaks the trailing \\b in
+    "washington, d.c."). This also lets us drop a bare "washington"
+    keyword, which used to misclassify shows in Seattle, WASHINGTON
+    (state) — "The Showbox, Seattle, Washington, United States" — as
+    Washington DC.
     """
-    text = address.lower()
+    text = address.lower().replace(".", "").replace(",", " ")
+    text = re.sub(r"\s+", " ", text)
     for city in WATCH_CITIES:
         if city["country"] not in text:
             continue
@@ -1348,8 +1358,18 @@ def send_report():
     if not results:
         return jsonify({"error": "No concert results to send"}), 400
 
-    # Build both message formats from a single flat list (avoids recomputing twice)
-    flat      = _flatten_results(results)
+    # Build both message formats from a single flat list (avoids recomputing twice).
+    # `results` is client-supplied JSON — guard against malformed shapes (missing
+    # "artist"/"concerts" keys) so a bad payload returns a 400 instead of a 500.
+    try:
+        flat = _flatten_results(results)
+    except (KeyError, TypeError) as exc:
+        log.warning("Malformed results payload in send-report: %s", exc)
+        return jsonify({"error": "Malformed results data"}), 400
+
+    if not flat:
+        return jsonify({"error": "No concert results to send"}), 400
+
     html_body = _build_email_html(flat, playlist_name)
     sms_body  = _build_sms_text(flat, playlist_name)
     show_count = len(flat)
