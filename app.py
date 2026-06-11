@@ -315,6 +315,38 @@ def _library_has_playlists(driver) -> bool:
     return bool(library.find_elements(By.CSS_SELECTOR, "[id^='onClickHint']"))
 
 
+# Spotify sometimes shows new/logged-out visitors an "Open in the Spotify
+# app?" interstitial instead of the web player (e.g. on open.spotify.com or
+# right after logging in). If that happens, the library sidebar never
+# appears and the harvest would silently come back empty. This is a
+# best-effort, no-op-if-absent click-through to keep scraping in the browser.
+_CONTINUE_IN_BROWSER_TEXTS = (
+    "continue in browser", "use web player", "open web player",
+    "continue here", "stay in browser", "open in browser", "no thanks",
+)
+
+
+def _dismiss_app_prompt(driver) -> None:
+    """If a visible 'open the Spotify app?' prompt is on screen, click
+    whichever option keeps the session in the browser. Safe no-op if no
+    such prompt is showing."""
+    try:
+        candidates = driver.find_elements(By.CSS_SELECTOR, "button, a, [role='button']")
+    except Exception:
+        return
+    for el in candidates:
+        try:
+            if not el.is_displayed():
+                continue
+            text = (el.text or el.get_attribute("aria-label") or "").strip().lower()
+            if any(t in text for t in _CONTINUE_IN_BROWSER_TEXTS):
+                el.click()
+                time.sleep(0.5)
+                return
+        except Exception:
+            continue
+
+
 # The library sidebar's outer element doesn't itself scroll — find the
 # nearest scrollable descendant (the actual virtualized viewport).
 _FIND_SCROLLER_JS = """
@@ -677,6 +709,7 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
     driver = _make_driver(headless=True, profile_dir=profile_dir)
     try:
         driver.get(playlist_url)
+        _dismiss_app_prompt(driver)
         _wait_for_tracklist(driver)
 
         artists = yield from _harvest_with_progress(
@@ -992,6 +1025,7 @@ def _harvest_liked_songs():
 
         driver.get(_LIKED_SONGS_URL)
         time.sleep(PAGE_SETTLE_S)
+        _dismiss_app_prompt(driver)
 
         if "collection/tracks" not in driver.current_url:
             driver.get(_LOGIN_URL)
@@ -1004,6 +1038,7 @@ def _harvest_liked_songs():
                     lambda d: "collection/tracks" in d.current_url
                 )
                 time.sleep(POST_LOGIN_S)
+                _dismiss_app_prompt(driver)
             except Exception:
                 raise RuntimeError("Login timed out — please try again.")
 
@@ -1085,6 +1120,7 @@ def spotify_playlists_stream():
 
             driver.get(_PLAYLISTS_URL)
             time.sleep(PAGE_SETTLE_S)
+            _dismiss_app_prompt(driver)
 
             if not _spotify_logged_in(driver):
                 driver.get(_LOGIN_URL_PLAYLISTS)
@@ -1095,6 +1131,7 @@ def spotify_playlists_stream():
                 try:
                     WebDriverWait(driver, LOGIN_TIMEOUT_S).until(_spotify_logged_in)
                     time.sleep(POST_LOGIN_S)
+                    _dismiss_app_prompt(driver)
                 except Exception:
                     yield sse("error", {"message": "Login timed out — please try again."})
                     return
