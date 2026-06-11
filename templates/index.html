@@ -696,8 +696,9 @@
 
       <p class="connect-desc" style="margin-top:0.85rem">
         These settings are shared by everyone using this app — anyone can add
-        their email or phone number below, and a single "Send by Email" sends
-        the report to <strong>everyone</strong> on both lists.
+        their email or phone number below, and a single "Send Report" sends
+        it to <strong>everyone</strong> on both lists, as an email and/or a
+        text message.
       </p>
 
       <div class="smtp-section">
@@ -758,7 +759,7 @@
   <div id="summary-row">
     <div id="summary"></div>
     <button class="btn-outline" id="dl-btn"    onclick="downloadTxt()">Save as TXT</button>
-    <button class="btn-outline" id="email-btn" onclick="sendReport()" disabled>Send by Email</button>
+    <button class="btn-outline" id="email-btn" onclick="sendReport()" disabled>Send Report</button>
   </div>
 
   <!-- Results -->
@@ -981,15 +982,25 @@
       if (data.error) {
         alert('Error: ' + data.error);
       } else {
-        const ok  = data.sent.length;
+        // Phone recipients are recorded as "number (Carrier)" so they can be
+        // told apart from email addresses for a clearer summary.
+        const isText = (to) => / \(.+\)$/.test(to);
+        const emailCount = data.sent.filter(to => !isText(to)).length;
+        const textCount  = data.sent.filter(isText).length;
         const bad = data.errors.length;
-        alert('Sent to ' + ok + ' recipient' + (ok !== 1 ? 's' : '') +
-          (bad ? '\nFailed: ' + data.errors.map(e => e.to).join(', ') : ''));
+
+        const parts = [];
+        if (emailCount) parts.push(emailCount + ' email' + (emailCount !== 1 ? 's' : ''));
+        if (textCount)  parts.push(textCount + ' text' + (textCount !== 1 ? 's' : ''));
+
+        let msg = parts.length ? 'Sent ' + parts.join(' and ') : 'Nothing sent';
+        if (bad) msg += '\nFailed: ' + data.errors.map(e => e.to).join(', ');
+        alert(msg);
       }
     } catch (e) {
       alert('Send failed: ' + e.message);
     }
-    btn.textContent = 'Send by Email';
+    btn.textContent = 'Send Report';
     refreshSendBtn();
   }
 
