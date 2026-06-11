@@ -1114,6 +1114,12 @@ def add_phone():
     data    = request.json or {}
     number  = re.sub(r"\D", "", data.get("number", ""))
     carrier = data.get("carrier", "").strip()
+    # Carrier email-to-SMS gateways (e.g. T-Mobile's @tmomail.net) expect a
+    # bare 10-digit US/Canada number — a leading "1" country code makes the
+    # gateway address invalid and the text silently never arrives. Strip it
+    # before storing.
+    if len(number) == 11 and number.startswith("1"):
+        number = number[1:]
     if not (10 <= len(number) <= 15):
         return jsonify({"error": "Number must be 10–15 digits"}), 400
     if carrier not in SMS_GATEWAYS:
