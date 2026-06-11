@@ -15,6 +15,7 @@ Run:
 Then open http://localhost:5001
 """
 
+import concurrent.futures
 import html
 import json
 import logging
@@ -63,7 +64,7 @@ POST_LOGIN_S       = 2       # wait after login completes
 ARTIST_WAIT_S      = 20      # max seconds to wait for first artist link
 LOGIN_TIMEOUT_S    = 180     # max seconds for user to log in
 HTTP_TIMEOUT_S     = 12      # requests.get timeout
-CONCERT_DELAY_S    = 0.3     # pause between per-artist Last.fm requests
+CONCERT_WORKERS    = 8       # concurrent Last.fm lookups during a scan
 
 # Email / SMS
 MAX_SMS_SHOWS      = 8       # cap on shows included in a text message
@@ -222,6 +223,83 @@ def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> w
     return driver
 
 
+def _find_tracklist_scope(driver):
+    """
+    Return the element containing the playlist/library tracklist, or
+    `driver` itself if none of the known containers can be found.
+
+    Used both to scope artist-link searches (so unrelated parts of the page
+    don't leak in) and to find the right element to scroll — the same
+    container must be used for both, otherwise scrolling one part of the
+    page while reading another causes the harvest to "stabilize" early.
+    """
+    for sel in _TRACKLIST_CONTAINER_SELECTORS:
+        try:
+            candidates = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            candidates = []
+        # A page can have several elements matching a generic selector (e.g.
+        # "[role='grid']" also matches recommendation grids). Only scope to
+        # one that actually contains artist links — otherwise an empty/wrong
+        # match would silently zero out the whole harvest. Virtualized rows
+        # can also detach mid-scroll, so a stale candidate is skipped rather
+        # than letting the exception bubble up and abort the whole scan.
+        for c in candidates:
+            try:
+                if c.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']"):
+                    return c
+            except Exception:
+                continue
+    return driver
+
+
+def _tracklist_ready(driver) -> bool:
+    """
+    True once the real tracklist (`[data-testid='track-list']` /
+    `[data-testid='playlist-tracklist']`) has rendered its rows.
+
+    If neither of those elements exists in the DOM at all (some page
+    layouts may not use them), fall back to whatever `_find_tracklist_scope`
+    would pick. But if the element exists and is just still empty
+    (virtualized rows haven't rendered yet), keep waiting rather than
+    falling back to a generic `[role='grid']` — a "Jump back in"/recommendation
+    rail can render artist links first and get mistaken for the tracklist,
+    causing the harvest to scope to (and scroll) the wrong, much smaller list.
+    """
+    for sel in _TRACKLIST_CONTAINER_SELECTORS[:2]:
+        try:
+            candidates = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            candidates = []
+        for c in candidates:
+            try:
+                if c.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']"):
+                    return True
+            except Exception:
+                continue
+        if candidates:
+            return False
+    return _find_tracklist_scope(driver) is not driver
+
+
+def _wait_for_tracklist(driver, timeout: int = ARTIST_WAIT_S):
+    """
+    Wait until the tracklist container (with at least one artist link) is
+    present in the DOM.
+
+    Waiting for *any* `a[href*='/artist/']` on the page (the previous
+    approach) is unreliable: recommendation rails, "fans also like"
+    sidebars, and concert-promo widgets often render artist links before
+    the actual tracklist does. That made the wait succeed too early, so the
+    harvest started before the tracklist existed, scoped to the wrong
+    (empty) container, and returned zero artists.
+    """
+    try:
+        WebDriverWait(driver, timeout).until(_tracklist_ready)
+    except Exception:
+        log.debug("Timed out waiting for tracklist container")
+
+
 def _harvest_artists(driver) -> dict:
     """
     Return {name: spotify_url} for every artist link in the playlist's
@@ -232,23 +310,7 @@ def _harvest_artists(driver) -> dict:
     the now-playing bar, related-artist sidebars, etc.) never leak into the
     results — only artists actually in this playlist/library are returned.
     """
-    scope = driver
-    for sel in _TRACKLIST_CONTAINER_SELECTORS:
-        try:
-            candidates = driver.find_elements(By.CSS_SELECTOR, sel)
-        except Exception:
-            candidates = []
-        # A page can have several elements matching a generic selector (e.g.
-        # "[role='grid']" also matches recommendation grids). Only scope to
-        # one that actually contains artist links — otherwise an empty/wrong
-        # match would silently zero out the whole harvest.
-        match = next(
-            (c for c in candidates if c.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']")),
-            None,
-        )
-        if match:
-            scope = match
-            break
+    scope = _find_tracklist_scope(driver)
 
     for selector in _ARTIST_SELECTORS:
         try:
@@ -258,8 +320,14 @@ def _harvest_artists(driver) -> dict:
         if elements:
             artists = {}
             for a in elements:
-                name = (a.text or "").strip()
-                href = (a.get_attribute("href") or "")
+                # Virtualized rows can detach mid-scroll, making a previously
+                # found element stale by the time we read its attributes —
+                # just skip it rather than aborting the whole harvest.
+                try:
+                    name = (a.text or "").strip()
+                    href = (a.get_attribute("href") or "")
+                except Exception:
+                    continue
                 if not name or "/artist/" not in href:
                     continue
                 if name.lower() in _NON_ARTIST_NAMES:
@@ -275,11 +343,36 @@ def _harvest_artists(driver) -> dict:
 # the window) and falls back to window scrolling otherwise. Returns the
 # container's scrollHeight so callers can detect when more rows have
 # lazy-loaded below the fold.
+#
+# A `scope` element (the tracklist/grid being harvested) can optionally be
+# passed in as the second argument — we then climb its ancestors to find the
+# nearest actually-scrollable one. The page can have several
+# [data-overlayscrollbars-viewport] elements at once (sidebar, "made for
+# you" rails, etc.), so picking the first one blindly (as
+# document.querySelector does) can scroll the wrong one entirely, leaving
+# the tracklist's height unchanged forever and causing the harvest to
+# "stabilize" (and stop) after only the first screenful of rows.
 _SCROLL_JS = """
 const px = arguments[0];
-const el = document.querySelector('[data-overlayscrollbars-viewport]')
-        || document.querySelector('.main-view-container__scroll-node')
-        || document.scrollingElement;
+const scope = arguments[1];
+let el = null;
+if (scope) {
+    let node = scope;
+    while (node && node !== document.body) {
+        const style = getComputedStyle(node);
+        const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+        if (scrollable && node.scrollHeight > node.clientHeight + 4) {
+            el = node;
+            break;
+        }
+        node = node.parentElement;
+    }
+}
+if (!el) {
+    el = document.querySelector('[data-overlayscrollbars-viewport]')
+      || document.querySelector('.main-view-container__scroll-node')
+      || document.scrollingElement;
+}
 el.scrollBy(0, px);
 return el.scrollHeight;
 """
@@ -301,7 +394,17 @@ def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: i
 
     for _ in range(max_scrolls):
         all_items.update(harvest_fn(driver))
-        height = driver.execute_script(_SCROLL_JS, SCROLL_PX)
+        scope = _find_tracklist_scope(driver) if harvest_fn is _harvest_artists else None
+        if scope is driver:
+            scope = None
+        try:
+            height = driver.execute_script(_SCROLL_JS, SCROLL_PX, scope)
+        except Exception:
+            # The scoped element can detach between being found and being
+            # passed to execute_script (virtualized rows re-render mid-scroll).
+            # Fall back to the generic viewport/window scroll for this round
+            # rather than aborting the whole harvest.
+            height = driver.execute_script(_SCROLL_JS, SCROLL_PX, None)
         yield len(all_items)
 
         if len(all_items) == last_count and height == last_height:
@@ -401,12 +504,7 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
     driver = _make_driver(headless=True, profile_dir=profile_dir)
     try:
         driver.get(playlist_url)
-        try:
-            WebDriverWait(driver, ARTIST_WAIT_S).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
-            )
-        except Exception:
-            log.debug("Timed out waiting for artist links — proceeding with what loaded")
+        _wait_for_tracklist(driver)
 
         artists = yield from _harvest_with_progress(
             driver, "Reading playlist", max_scrolls=MAX_SCROLLS_SHORT
@@ -590,6 +688,13 @@ def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str)
     """
     Generator that yields SSE events for the concert-search phase.
     Shared between the playlist and liked-songs routes.
+
+    Last.fm lookups are I/O-bound (network round-trips that dwarf any local
+    work), so they're run CONCERT_WORKERS at a time in a thread pool instead
+    of one-by-one — this cuts wall-clock time for large libraries from tens
+    of minutes down to a few. Progress/results are streamed as each lookup
+    completes, which may be a different order than `artists` since faster
+    lookups finish first; the frontend doesn't depend on ordering.
     """
     artists = sorted(artists_map)
     yield sse("playlist_info", {"name": playlist_name, "image": playlist_image})
@@ -597,19 +702,27 @@ def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str)
     yield sse("status", {"message": f"Searching {len(artists)} artists on Last.fm..."})
 
     found_count = 0
-    for i, artist in enumerate(artists):
-        yield sse("progress", {"current": i + 1, "total": len(artists), "artist": artist})
-        concerts = find_concerts(artist)
-        if concerts:
-            found_count += 1
-            spotify_url = artists_map.get(artist, "")
-            yield sse("result", {
-                "artist":      artist,
-                "spotify_url": spotify_url,
-                "image":       _artist_image(spotify_url),
-                "concerts":    concerts,
-            })
-        time.sleep(CONCERT_DELAY_S)
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONCERT_WORKERS) as executor:
+        future_to_artist = {executor.submit(find_concerts, artist): artist for artist in artists}
+        for future in concurrent.futures.as_completed(future_to_artist):
+            artist = future_to_artist[future]
+            completed += 1
+            yield sse("progress", {"current": completed, "total": len(artists), "artist": artist})
+            try:
+                concerts = future.result()
+            except Exception as exc:
+                log.debug("Concert lookup failed for %s: %s", artist, exc)
+                concerts = []
+            if concerts:
+                found_count += 1
+                spotify_url = artists_map.get(artist, "")
+                yield sse("result", {
+                    "artist":      artist,
+                    "spotify_url": spotify_url,
+                    "image":       _artist_image(spotify_url),
+                    "concerts":    concerts,
+                })
 
     yield sse("done", {"total_artists": len(artists), "artists_with_shows": found_count})
 
@@ -713,12 +826,7 @@ def _harvest_liked_songs():
                 raise RuntimeError("Login timed out — please try again.")
 
         yield sse("status", {"message": "Reading your Liked Songs..."})
-        try:
-            WebDriverWait(driver, ARTIST_WAIT_S).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/artist/']"))
-            )
-        except Exception:
-            log.debug("Timed out waiting for artist links in Liked Songs")
+        _wait_for_tracklist(driver)
 
         artists_map = yield from _harvest_with_progress(
             driver, "Reading your Liked Songs", max_scrolls=MAX_SCROLLS_LONG
