@@ -715,9 +715,22 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
 
 # Concert search — Last.fm
 
-def _city_for_address(address: str) -> Optional[str]:
+# Last.fm venue addresses are just "<city>, <country>" with no state/region,
+# so a handful of city keywords collide with same-named places elsewhere
+# (e.g. "Arlington, United States" could be Arlington, VA — near DC — or
+# Arlington, TX, home of AT&T Stadium). Matches on these keywords are
+# provisional and must be confirmed via _verify_dc_area() before acceptance.
+_AMBIGUOUS_CITY_KEYWORDS = {"arlington", "alexandria"}
+
+# US ZIP code prefixes covering DC (20xxx) and the Arlington/Alexandria, VA
+# suburbs (222xx / 223xx) that count as "Washington DC" for our purposes.
+_DC_AREA_ZIP_PREFIXES = ("20", "222", "223")
+
+
+def _city_for_address(address: str) -> tuple:
     """
-    Map a Last.fm venue address string to a watched-city label, or None.
+    Map a Last.fm venue address string to (city_label, ambiguous_keyword).
+    Returns (None, None) if the address doesn't match any watched city.
 
     Matching requires the address to also mention the watched city's country
     (so e.g. "Brisbane, Queensland, Australia" can't match "queens"), and
@@ -732,6 +745,11 @@ def _city_for_address(address: str) -> Optional[str]:
     keyword, which used to misclassify shows in Seattle, WASHINGTON
     (state) — "The Showbox, Seattle, Washington, United States" — as
     Washington DC.
+
+    `ambiguous_keyword` is set when the match relied on a keyword that's
+    shared with a same-named place outside the watched area (see
+    _AMBIGUOUS_CITY_KEYWORDS); the caller should verify such matches before
+    trusting them.
     """
     text = address.lower().replace(".", "").replace(",", " ")
     text = re.sub(r"\s+", " ", text)
@@ -740,8 +758,31 @@ def _city_for_address(address: str) -> Optional[str]:
             continue
         for kw in city["keywords"]:
             if re.search(r"\b" + re.escape(kw) + r"\b", text):
-                return city["label"]
-    return None
+                ambiguous = kw if kw in _AMBIGUOUS_CITY_KEYWORDS else None
+                return city["label"], ambiguous
+    return None, None
+
+
+def _verify_dc_area(event_url: str) -> bool:
+    """
+    Confirm a venue matched only via an ambiguous keyword (e.g. "Arlington")
+    is actually in the DC area, by fetching the event page and checking the
+    venue's postal code. Returns False (reject) if the page can't be fetched
+    or carries no recognizable DC-area ZIP code — better to miss an edge
+    case than to report a show in the wrong city across the country.
+    """
+    if not event_url:
+        return False
+    try:
+        resp = _HTTP.get(event_url, timeout=HTTP_TIMEOUT_S)
+    except requests.RequestException:
+        return False
+    if resp.status_code != 200:
+        return False
+    m = re.search(r'itemprop="postalCode">\s*(\d{5})', resp.text)
+    if not m:
+        return False
+    return m.group(1).startswith(_DC_AREA_ZIP_PREFIXES)
 
 
 def _artist_slugs(artist_name: str) -> list:
@@ -807,8 +848,19 @@ def find_concerts(artist_name: str) -> list:
         for row in rows:
             addr_el = row.select_one(".events-list-item-venue--address")
             address = addr_el.get_text(strip=True) if addr_el else ""
-            city    = _city_for_address(address)
+            city, ambiguous_kw = _city_for_address(address)
             if not city:
+                continue
+
+            link_el  = row.select_one("a.events-list-item-event-name")
+            raw_href = link_el.get("href", "") if link_el else ""
+            url      = ("https://www.last.fm" + raw_href) if raw_href.startswith("/") else raw_href
+
+            # "Arlington"/"Alexandria" alone are ambiguous (they also name
+            # places far outside the DC area, e.g. AT&T Stadium in
+            # Arlington, TX) — confirm via the venue's ZIP code before
+            # accepting the match.
+            if ambiguous_kw and not _verify_dc_area(url):
                 continue
 
             time_el  = row.select_one("time[datetime]")
@@ -830,10 +882,6 @@ def find_concerts(artist_name: str) -> list:
 
             venue_el = row.select_one(".events-list-item-venue--title")
             venue    = venue_el.get_text(strip=True) if venue_el else ""
-
-            link_el  = row.select_one("a.events-list-item-event-name")
-            raw_href = link_el.get("href", "") if link_el else ""
-            url      = ("https://www.last.fm" + raw_href) if raw_href.startswith("/") else raw_href
 
             events.append({
                 "event_name":  event_name,
