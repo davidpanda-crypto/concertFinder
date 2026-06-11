@@ -103,6 +103,17 @@ BROWSER_UA = (
 )
 BROWSER_HEADERS = {"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9"}
 
+# Shared session for Last.fm/Spotify HTTP lookups — reuses connections (TLS
+# handshake + TCP) across the hundreds of requests a large-library scan
+# makes instead of opening a fresh connection every time. The pool is sized
+# to comfortably cover CONCERT_WORKERS concurrent threads. requests.Session
+# + urllib3's connection pool are thread-safe to share this way.
+_HTTP = requests.Session()
+_HTTP.headers.update(BROWSER_HEADERS)
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16)
+_HTTP.mount("https://", _HTTP_ADAPTER)
+_HTTP.mount("http://", _HTTP_ADAPTER)
+
 WATCH_CITIES = [
     {
         "label": "New York City",
@@ -300,7 +311,7 @@ def _wait_for_tracklist(driver, timeout: int = ARTIST_WAIT_S):
         log.debug("Timed out waiting for tracklist container")
 
 
-def _harvest_artists(driver) -> dict:
+def _harvest_artists(driver, scope=None) -> dict:
     """
     Return {name: spotify_url} for every artist link in the playlist's
     tracklist that's currently in the DOM.
@@ -309,8 +320,13 @@ def _harvest_artists(driver) -> dict:
     one, so artist links from unrelated parts of the page (recommendations,
     the now-playing bar, related-artist sidebars, etc.) never leak into the
     results — only artists actually in this playlist/library are returned.
+
+    `scope` can be passed in by callers that already located the tracklist
+    container this round (e.g. _scroll_and_harvest_iter), avoiding a second
+    round-trip through _find_tracklist_scope.
     """
-    scope = _find_tracklist_scope(driver)
+    if scope is None:
+        scope = _find_tracklist_scope(driver)
 
     for selector in _ARTIST_SELECTORS:
         try:
@@ -393,12 +409,19 @@ def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: i
     last_count = last_height = stable_rounds = 0
 
     for _ in range(max_scrolls):
-        all_items.update(harvest_fn(driver))
-        scope = _find_tracklist_scope(driver) if harvest_fn is _harvest_artists else None
-        if scope is driver:
-            scope = None
+        if harvest_fn is _harvest_artists:
+            # Find the tracklist container once and reuse it for both the
+            # harvest and the scroll target, instead of querying the DOM
+            # twice per round (each find_elements() call is a Selenium
+            # round-trip, which adds up over hundreds of scroll steps).
+            scope = _find_tracklist_scope(driver)
+            all_items.update(_harvest_artists(driver, scope))
+            scroll_scope = None if scope is driver else scope
+        else:
+            all_items.update(harvest_fn(driver))
+            scroll_scope = None
         try:
-            height = driver.execute_script(_SCROLL_JS, SCROLL_PX, scope)
+            height = driver.execute_script(_SCROLL_JS, SCROLL_PX, scroll_scope)
         except Exception:
             # The scoped element can detach between being found and being
             # passed to execute_script (virtualized rows re-render mid-scroll).
@@ -593,9 +616,8 @@ def find_concerts(artist_name: str) -> list:
     """
     for slug in _artist_slugs(artist_name):
         try:
-            resp = requests.get(
+            resp = _HTTP.get(
                 f"https://www.last.fm/music/{slug}/+events",
-                headers=BROWSER_HEADERS,
                 timeout=HTTP_TIMEOUT_S,
             )
         except requests.RequestException as exc:
@@ -674,7 +696,7 @@ def _artist_image(spotify_url: str) -> str:
     if not spotify_url:
         return ""
     try:
-        resp = requests.get(spotify_url, headers=BROWSER_HEADERS, timeout=HTTP_TIMEOUT_S)
+        resp = _HTTP.get(spotify_url, timeout=HTTP_TIMEOUT_S)
         if resp.status_code == 200:
             m = _OG_IMAGE_RE.search(resp.text)
             if m:
