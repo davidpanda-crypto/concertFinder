@@ -234,15 +234,22 @@ def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> w
     return driver
 
 
-def _find_tracklist_scope(driver):
+def _find_scroll_scope(driver, link_selector="a[href*='/artist/']"):
     """
-    Return the element containing the playlist/library tracklist, or
-    `driver` itself if none of the known containers can be found.
+    Return the element containing the relevant list (a tracklist of artist
+    links, or a library list of playlist links), or `driver` itself if none
+    of the known containers can be found.
 
-    Used both to scope artist-link searches (so unrelated parts of the page
-    don't leak in) and to find the right element to scroll — the same
-    container must be used for both, otherwise scrolling one part of the
-    page while reading another causes the harvest to "stabilize" early.
+    Used both to scope link searches (so unrelated parts of the page don't
+    leak in) and to find the right element to scroll — the same container
+    must be used for both, otherwise scrolling one part of the page while
+    reading another causes the harvest to "stabilize" early and miss rows
+    that would otherwise lazy-load further down (e.g. only the first
+    screenful of a long playlist library).
+
+    `link_selector` lets callers scope to whichever kind of link identifies
+    "the real list" on their page — `a[href*='/artist/']` for a track list,
+    `a[href*='/playlist/']` for the playlist library.
     """
     for sel in _TRACKLIST_CONTAINER_SELECTORS:
         try:
@@ -251,17 +258,23 @@ def _find_tracklist_scope(driver):
             candidates = []
         # A page can have several elements matching a generic selector (e.g.
         # "[role='grid']" also matches recommendation grids). Only scope to
-        # one that actually contains artist links — otherwise an empty/wrong
-        # match would silently zero out the whole harvest. Virtualized rows
-        # can also detach mid-scroll, so a stale candidate is skipped rather
-        # than letting the exception bubble up and abort the whole scan.
+        # one that actually contains the links we care about — otherwise an
+        # empty/wrong match would silently zero out the whole harvest.
+        # Virtualized rows can also detach mid-scroll, so a stale candidate
+        # is skipped rather than letting the exception bubble up and abort
+        # the whole scan.
         for c in candidates:
             try:
-                if c.find_elements(By.CSS_SELECTOR, "a[href*='/artist/']"):
+                if c.find_elements(By.CSS_SELECTOR, link_selector):
                     return c
             except Exception:
                 continue
     return driver
+
+
+def _find_tracklist_scope(driver):
+    """Backwards-compatible alias: scope to the track list (artist links)."""
+    return _find_scroll_scope(driver, "a[href*='/artist/']")
 
 
 def _tracklist_ready(driver) -> bool:
@@ -408,14 +421,23 @@ def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: i
     all_items: dict = {}
     last_count = last_height = stable_rounds = 0
 
+    # Which kind of link identifies "the real list" for each harvest
+    # function — used to scope both the harvest and the scroll target so
+    # scrolling one part of the page while reading another doesn't cause
+    # the harvest to "stabilize" (and stop) before every row has loaded.
+    link_selector = {
+        _harvest_artists:   "a[href*='/artist/']",
+        _harvest_playlists: "a[href*='/playlist/']",
+    }.get(harvest_fn)
+
     for _ in range(max_scrolls):
-        if harvest_fn is _harvest_artists:
-            # Find the tracklist container once and reuse it for both the
+        if link_selector:
+            # Find the list container once and reuse it for both the
             # harvest and the scroll target, instead of querying the DOM
             # twice per round (each find_elements() call is a Selenium
             # round-trip, which adds up over hundreds of scroll steps).
-            scope = _find_tracklist_scope(driver)
-            all_items.update(_harvest_artists(driver, scope))
+            scope = _find_scroll_scope(driver, link_selector)
+            all_items.update(harvest_fn(driver, scope))
             scroll_scope = None if scope is driver else scope
         else:
             all_items.update(harvest_fn(driver))
@@ -483,10 +505,14 @@ _PLAYLIST_SELECTORS = [
 ]
 
 
-def _harvest_playlists(driver) -> dict:
-    """Return {name: {"url": spotify_url, "image": cover_image_url}} for playlist rows in the DOM."""
+def _harvest_playlists(driver, scope=None) -> dict:
+    """
+    Return {name: {"url": spotify_url, "image": cover_image_url}} for playlist
+    rows in the DOM (or within `scope`, if given — see _find_scroll_scope).
+    """
+    root = scope if scope is not None else driver
     for selector in _PLAYLIST_SELECTORS:
-        elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        elements = root.find_elements(By.CSS_SELECTOR, selector)
         if elements:
             playlists = {}
             for a in elements:
