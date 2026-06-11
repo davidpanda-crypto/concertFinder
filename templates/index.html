@@ -22,12 +22,15 @@
     /* Reset */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html { scroll-behavior: smooth; }
+
     body {
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       min-height: 100vh;
       line-height: 1.5;
+      scroll-padding-top: 4.5rem;
     }
 
     /* Layout */
@@ -478,12 +481,88 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Quick nav — sticky shortcuts so long pages (lots of results) are easy
+       to jump around without endless scrolling/swiping. */
+    .quicknav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+      padding: 0.6rem 1.25rem;
+      background: rgba(13,13,13,0.85);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .quicknav::-webkit-scrollbar { display: none; }
+    .quicknav-link {
+      flex-shrink: 0;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 0.4rem 0.85rem;
+      border-radius: 99px;
+      border: 1px solid transparent;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      white-space: nowrap;
+    }
+    .quicknav-link:hover { color: var(--text); border-color: var(--border); }
+    .quicknav-link.active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(168,85,247,0.08);
+    }
+    .quicknav-spacer { flex: 1; }
+    .quicknav-brand {
+      flex-shrink: 0;
+      font-size: 0.85rem;
+      font-weight: 800;
+      background: linear-gradient(120deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      padding-right: 0.5rem;
+      white-space: nowrap;
+    }
+
+    /* Back-to-top floating button */
+    #back-to-top {
+      position: fixed;
+      right: 1.25rem;
+      bottom: 1.25rem;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1.1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s, border-color 0.15s;
+      z-index: 60;
+    }
+    #back-to-top.visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    #back-to-top:hover { border-color: var(--accent); color: var(--accent); }
+
     /* Responsive */
     @media (max-width: 540px) {
       header h1 { font-size: 1.6rem; }
       .add-row, .smtp-grid { flex-direction: column; }
       .show-card { flex-wrap: wrap; }
       .tix-btn { margin-left: auto; }
+      .quicknav-brand { display: none; }
     }
   </style>
 </head>
@@ -494,10 +573,18 @@
   <p>Log in with Spotify — find upcoming shows in New York City, Prince Edward Island &amp; Washington DC</p>
 </header>
 
+<nav class="quicknav" id="quicknav">
+  <span class="quicknav-brand">Concert Finder</span>
+  <a href="#search-card" class="quicknav-link" data-target="search-card">Search</a>
+  <a href="#email-card" class="quicknav-link" data-target="email-card">Notify Me</a>
+  <a href="#results-section" class="quicknav-link" data-target="results-section">Results</a>
+  <span class="quicknav-spacer"></span>
+</nav>
+
 <main>
 
   <!-- Search -->
-  <div class="card search-card">
+  <div class="card search-card" id="search-card">
     <div id="connect-section">
       <label class="field-label">Spotify Account</label>
       <p class="connect-desc">Log in with Spotify to scan your playlists and Liked Songs for upcoming shows.</p>
@@ -532,7 +619,7 @@
   </div>
 
   <!-- Email panel -->
-  <div class="card">
+  <div class="card" id="email-card">
     <div class="panel-header" onclick="toggleEmailPanel()">
       <div class="panel-title">
         ✉ Email Recipients
@@ -604,7 +691,9 @@
   </div>
 
   <!-- Results -->
-  <div id="results"></div>
+  <div id="results-section">
+    <div id="results"></div>
+  </div>
 
 </main>
 
@@ -612,6 +701,8 @@
   New York City &bull; Prince Edward Island &bull; Washington DC
   &bull; Concert data from Last.fm &bull; Artist data from Spotify
 </footer>
+
+<button id="back-to-top" title="Back to top" aria-label="Back to top" onclick="window.scrollTo({top:0, behavior:'smooth'})">&#8593;</button>
 
 <script>
   // State
@@ -835,6 +926,12 @@
     $id('bar-fill').style.width           = '0%';
     $id('bar-label').textContent          = '';
     $id('playlist-pill').style.display    = 'none';
+
+    // Bring the progress bar into view so the user can immediately see the
+    // scan starting, even if they were scrolled down picking playlists.
+    requestAnimationFrame(() => {
+      $id('progress-section').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
   }
 
   // Attaches the standard SSE event listeners to an already-open EventSource.
@@ -890,6 +987,7 @@
           (artists_with_shows !== 1 ? 's' : '') +
           ' out of ' + total_artists + ' in the playlist.';
         renderResults();
+        $id('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else {
         $id('summary').textContent =
           'No upcoming shows found in any watched city for the ' + total_artists + ' artists.';
@@ -1196,11 +1294,41 @@
     URL.revokeObjectURL(a.href);
   }
 
+  // Back-to-top button: fade in once the user has scrolled past the header.
+  window.addEventListener('scroll', () => {
+    $id('back-to-top').classList.toggle('visible', window.scrollY > 400);
+  }, { passive: true });
+
+  // Quick-nav active-link highlighting: track which section is currently
+  // in view so the nav bar shows the user where they are on the page.
+  function setupQuickNav() {
+    const links = Array.from(document.querySelectorAll('.quicknav-link'));
+    const sections = links
+      .map(link => $id(link.dataset.target))
+      .filter(Boolean);
+
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        const link = links.find(l => l.dataset.target === entry.target.id);
+        if (!link) return;
+        if (entry.isIntersecting) {
+          links.forEach(l => l.classList.remove('active'));
+          link.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+
+    sections.forEach(section => observer.observe(section));
+  }
+
   // Init
   window.addEventListener('DOMContentLoaded', () => {
     loadRecipients();
     loadSmtpConfig();
     loadCarriers();
+    setupQuickNav();
   });
 </script>
 
