@@ -286,11 +286,33 @@ _LIBRARY_SCOPE_SELECTOR = ".YourLibraryX"
 
 def _find_library_scope(driver):
     """Return the 'Your Library' sidebar element, or None if not present
-    (e.g. not logged in, or the home page hasn't finished loading)."""
+    (e.g. the home page hasn't finished loading)."""
     try:
         return driver.find_element(By.CSS_SELECTOR, _LIBRARY_SCOPE_SELECTOR)
     except Exception:
         return None
+
+
+def _spotify_logged_in(driver) -> bool:
+    """
+    True if the Spotify web player shows a logged-in session.
+
+    The "Your Library" sidebar (.YourLibraryX) is present in the DOM even
+    when logged out (with a couple of empty placeholder rows), so it can't
+    be used to detect login on its own. A signed-out home page instead
+    shows a "Log in" button (data-testid='login-button'), which disappears
+    once a session is active — that's the reliable signal.
+    """
+    return not driver.find_elements(By.CSS_SELECTOR, "[data-testid='login-button']")
+
+
+def _library_has_playlists(driver) -> bool:
+    """True once the library sidebar has at least one real (non-placeholder)
+    row — i.e. a row carrying an onClickHint helper for an actual entity."""
+    library = _find_library_scope(driver)
+    if library is None:
+        return False
+    return bool(library.find_elements(By.CSS_SELECTOR, "[id^='onClickHint']"))
 
 
 # The library sidebar's outer element doesn't itself scroll — find the
@@ -1064,16 +1086,14 @@ def spotify_playlists_stream():
             driver.get(_PLAYLISTS_URL)
             time.sleep(PAGE_SETTLE_S)
 
-            if _find_library_scope(driver) is None:
+            if not _spotify_logged_in(driver):
                 driver.get(_LOGIN_URL_PLAYLISTS)
                 yield sse("login_required", {
                     "message": "Please log into Spotify in the browser window. "
                                "Once logged in your playlists will load automatically."
                 })
                 try:
-                    WebDriverWait(driver, LOGIN_TIMEOUT_S).until(
-                        lambda d: _find_library_scope(d) is not None
-                    )
+                    WebDriverWait(driver, LOGIN_TIMEOUT_S).until(_spotify_logged_in)
                     time.sleep(POST_LOGIN_S)
                 except Exception:
                     yield sse("error", {"message": "Login timed out — please try again."})
@@ -1081,12 +1101,7 @@ def spotify_playlists_stream():
 
             yield sse("status", {"message": "Loading your playlists..."})
             try:
-                WebDriverWait(driver, ARTIST_WAIT_S).until(
-                    lambda d: bool(
-                        _find_library_scope(d)
-                        and _find_library_scope(d).find_elements(By.CSS_SELECTOR, "[role='row']")
-                    )
-                )
+                WebDriverWait(driver, ARTIST_WAIT_S).until(_library_has_playlists)
             except Exception:
                 log.debug("Timed out waiting for library sidebar rows")
 
