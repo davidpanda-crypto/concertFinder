@@ -277,6 +277,41 @@ def _find_tracklist_scope(driver):
     return _find_scroll_scope(driver, "a[href*='/artist/']")
 
 
+# The "Your Library" sidebar on the Spotify home page — playlists, Liked
+# Songs, followed artists/albums, and saved concerts/podcasts all live here
+# as a single virtualized list. Unlike the tracklist, rows have no <a href>,
+# so they need their own scope/scroll handling (see _harvest_playlists).
+_LIBRARY_SCOPE_SELECTOR = ".YourLibraryX"
+
+
+def _find_library_scope(driver):
+    """Return the 'Your Library' sidebar element, or None if not present
+    (e.g. not logged in, or the home page hasn't finished loading)."""
+    try:
+        return driver.find_element(By.CSS_SELECTOR, _LIBRARY_SCOPE_SELECTOR)
+    except Exception:
+        return None
+
+
+# The library sidebar's outer element doesn't itself scroll — find the
+# nearest scrollable descendant (the actual virtualized viewport).
+_FIND_SCROLLER_JS = """
+const root = arguments[0];
+function find(el, depth) {
+    if (!el || depth > 6) return null;
+    const style = getComputedStyle(el);
+    const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+    if (scrollable && el.scrollHeight > el.clientHeight + 4) return el;
+    for (const c of el.children) {
+        const r = find(c, depth + 1);
+        if (r) return r;
+    }
+    return null;
+}
+return find(root, 0);
+"""
+
+
 def _tracklist_ready(driver) -> bool:
     """
     True once the real tracklist (`[data-testid='track-list']` /
@@ -407,6 +442,60 @@ return el.scrollHeight;
 """
 
 
+def _scroll_and_harvest_playlists_iter(driver, max_scrolls: int = MAX_SCROLLS_SHORT):
+    """
+    Scroll the "Your Library" sidebar to load every saved playlist.
+
+    The sidebar is a virtualized list (only ~20-25 rows are ever in the DOM
+    at once, covering playlists, Liked Songs, followed artists/albums,
+    concerts, etc.), so it needs its own scroll loop rather than the
+    tracklist's scrollBy-on-the-page approach: we find the sidebar's actual
+    scrollable viewport and step its scrollTop directly.
+
+    Yields the running playlist count and returns the final
+    {name: {...}} dict (via StopIteration.value), same contract as
+    _scroll_and_harvest_iter.
+    """
+    all_items: dict = {}
+    last_count = last_top = stable_rounds = 0
+
+    library = _find_library_scope(driver)
+    if library is None:
+        return all_items
+
+    try:
+        scroller = driver.execute_script(_FIND_SCROLLER_JS, library)
+    except Exception:
+        scroller = None
+
+    for _ in range(max_scrolls):
+        all_items.update(_harvest_playlists(driver, library))
+        if scroller is None:
+            break
+        try:
+            top = driver.execute_script(
+                "arguments[0].scrollTop += arguments[1]; return arguments[0].scrollTop;",
+                scroller, SCROLL_PX,
+            )
+        except Exception:
+            break
+        yield len(all_items)
+
+        if len(all_items) == last_count and top == last_top:
+            stable_rounds += 1
+            if stable_rounds >= STABLE_ROUNDS:
+                break
+        else:
+            stable_rounds = 0
+            last_count = len(all_items)
+            last_top = top
+
+        time.sleep(SCROLL_DELAY_S)
+
+    all_items.update(_harvest_playlists(driver, library))  # final sweep after scroll settles
+    return all_items
+
+
 def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: int = MAX_SCROLLS_LONG):
     """
     Scroll the list in SCROLL_PX steps, harvesting items via harvest_fn after each step.
@@ -418,6 +507,12 @@ def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: i
     surface live progress (useful for very large libraries/playlists).
     Returns the final {name: ...} dict (via StopIteration.value).
     """
+    if harvest_fn is _harvest_playlists:
+        # The library sidebar has its own structure/scroll mechanics —
+        # delegate to a dedicated loop instead of forcing it through the
+        # tracklist-shaped logic below.
+        return (yield from _scroll_and_harvest_playlists_iter(driver, max_scrolls))
+
     all_items: dict = {}
     last_count = last_height = stable_rounds = 0
 
@@ -427,7 +522,6 @@ def _scroll_and_harvest_iter(driver, harvest_fn=_harvest_artists, max_scrolls: i
     # the harvest to "stabilize" (and stop) before every row has loaded.
     link_selector = {
         _harvest_artists:   "a[href*='/artist/']",
-        _harvest_playlists: "a[href*='/playlist/']",
     }.get(harvest_fn)
 
     for _ in range(max_scrolls):
@@ -497,41 +591,49 @@ def _harvest_with_progress(driver, label: str, harvest_fn=_harvest_artists, max_
             last_emitted = count
 
 
-# Spotify injects playlist links inside the library/collection list
-_PLAYLIST_SELECTORS = [
-    "[data-testid='playlist-row'] a[href*='/playlist/']",
-    "div[role='row'] a[href*='/playlist/']",
-    "a[href*='/playlist/']",
-]
-
-
 def _harvest_playlists(driver, scope=None) -> dict:
     """
-    Return {name: {"url": spotify_url, "image": cover_image_url}} for playlist
-    rows in the DOM (or within `scope`, if given — see _find_scroll_scope).
+    Return {name: {"url": spotify_url, "image": cover_image_url}} for the
+    user's saved playlists, read from the "Your Library" sidebar
+    (`.YourLibraryX`) on the Spotify home page.
+
+    The sidebar is a single virtualized list mixing playlists, Liked Songs,
+    followed artists/albums, podcasts, and saved concerts/events — and its
+    rows are `div[role="row"]` elements with no `<a href>` (navigation is
+    click/JS-driven). Each row instead carries a hidden helper div whose id
+    encodes the entity's Spotify URI, e.g.
+    `id="onClickHintspotify:playlist:<id>"`, which we use to build the
+    playlist URL and to filter out everything that isn't a playlist.
+
+    Row title text also isn't reported via Selenium's `.text` for
+    off-screen virtualized rows, so it's read via `textContent` instead.
     """
-    root = scope if scope is not None else driver
-    for selector in _PLAYLIST_SELECTORS:
-        elements = root.find_elements(By.CSS_SELECTOR, selector)
-        if elements:
-            playlists = {}
-            for a in elements:
-                name = (a.text or "").strip()
-                href = (a.get_attribute("href") or "").split("?")[0]
-                if not name or "/playlist/" not in href or name in playlists:
-                    continue
-                image = ""
-                try:
-                    row = a.find_element(
-                        By.XPATH,
-                        "./ancestor::div[@role='row' or @data-testid='playlist-row'][1]",
-                    )
-                    image = row.find_element(By.CSS_SELECTOR, "img").get_attribute("src") or ""
-                except Exception:
-                    pass
-                playlists[name] = {"url": href, "image": image}
-            return playlists
-    return {}
+    root = scope if scope is not None else _find_library_scope(driver)
+    if root is None:
+        return {}
+    playlists = {}
+    for row in root.find_elements(By.CSS_SELECTOR, "[role='row']"):
+        try:
+            hint = row.find_element(By.CSS_SELECTOR, "[id^='onClickHintspotify:playlist:']")
+        except Exception:
+            continue
+        playlist_id = hint.get_attribute("id").rsplit(":", 1)[-1]
+        if not playlist_id:
+            continue
+        try:
+            title_el = row.find_element(By.CSS_SELECTOR, "[data-encore-id='listRowTitle']")
+            name = (driver.execute_script("return arguments[0].textContent", title_el) or "").strip()
+        except Exception:
+            continue
+        if not name or name == "Liked Songs" or name in playlists:
+            continue
+        image = ""
+        try:
+            image = row.find_element(By.CSS_SELECTOR, "img[data-testid='entity-image']").get_attribute("src") or ""
+        except Exception:
+            pass
+        playlists[name] = {"url": f"https://open.spotify.com/playlist/{playlist_id}", "image": image}
+    return playlists
 
 
 # Spotify — playlist scraper
@@ -930,10 +1032,13 @@ def liked_songs_stream():
 
 # Routes — /api/spotify-playlists
 
-_PLAYLISTS_URL = "https://open.spotify.com/collection/playlists"
+# The playlist library now lives in the "Your Library" sidebar on the
+# Spotify home page — /collection/playlists redirects to Liked Songs and no
+# longer shows a playlist grid.
+_PLAYLISTS_URL = "https://open.spotify.com/"
 _LOGIN_URL_PLAYLISTS = (
     "https://accounts.spotify.com/login"
-    "?continue=https%3A%2F%2Fopen.spotify.com%2Fcollection%2Fplaylists"
+    "?continue=https%3A%2F%2Fopen.spotify.com%2F"
 )
 
 
@@ -959,7 +1064,7 @@ def spotify_playlists_stream():
             driver.get(_PLAYLISTS_URL)
             time.sleep(PAGE_SETTLE_S)
 
-            if "collection/playlists" not in driver.current_url:
+            if _find_library_scope(driver) is None:
                 driver.get(_LOGIN_URL_PLAYLISTS)
                 yield sse("login_required", {
                     "message": "Please log into Spotify in the browser window. "
@@ -967,7 +1072,7 @@ def spotify_playlists_stream():
                 })
                 try:
                     WebDriverWait(driver, LOGIN_TIMEOUT_S).until(
-                        lambda d: "collection/playlists" in d.current_url
+                        lambda d: _find_library_scope(d) is not None
                     )
                     time.sleep(POST_LOGIN_S)
                 except Exception:
@@ -977,10 +1082,13 @@ def spotify_playlists_stream():
             yield sse("status", {"message": "Loading your playlists..."})
             try:
                 WebDriverWait(driver, ARTIST_WAIT_S).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/playlist/']"))
+                    lambda d: bool(
+                        _find_library_scope(d)
+                        and _find_library_scope(d).find_elements(By.CSS_SELECTOR, "[role='row']")
+                    )
                 )
             except Exception:
-                log.debug("Timed out waiting for playlist rows")
+                log.debug("Timed out waiting for library sidebar rows")
 
             playlists_map = yield from _harvest_with_progress(
                 driver, "Loading your playlists", harvest_fn=_harvest_playlists, max_scrolls=MAX_SCROLLS_SHORT
