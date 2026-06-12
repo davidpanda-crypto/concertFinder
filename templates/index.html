@@ -508,6 +508,44 @@
 
     #scan-btn { margin-top: 0.85rem; width: 100%; }
 
+    /* Weekly auto-scan toggle */
+    #autoscan-section {
+      margin-top: 1rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
+    .autoscan-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.65rem;
+      cursor: pointer;
+    }
+    .autoscan-row input[type="checkbox"] {
+      width: 17px; height: 17px;
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .autoscan-row .autoscan-label { font-size: 0.88rem; font-weight: 600; }
+    .autoscan-row .autoscan-desc {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 0.15rem;
+    }
+    #autoscan-save {
+      margin-top: 0.6rem;
+      width: 100%;
+    }
+    #autoscan-status {
+      margin-top: 0.5rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-height: 1.1em;
+    }
+    #autoscan-status.success { color: var(--accent); }
+
     /* Login overlay */
     #login-overlay {
       display: none;
@@ -666,6 +704,21 @@
       </div>
       <div class="playlist-list" id="playlist-list"></div>
       <button class="btn-primary" id="scan-btn" onclick="startMultiScan()" disabled>Scan Selected</button>
+
+      <div id="autoscan-section">
+        <label class="autoscan-row">
+          <input type="checkbox" id="autoscan-enabled" onchange="updateAutoscanBtn()" />
+          <div>
+            <div class="autoscan-label">Auto-scan every Sunday</div>
+            <div class="autoscan-desc">
+              Re-run this scan automatically every Sunday morning and email/text the
+              upcoming shows to everyone in Email Recipients below.
+            </div>
+          </div>
+        </label>
+        <button class="btn-outline" id="autoscan-save" onclick="saveAutoscan()" disabled>Save Auto-scan Settings</button>
+        <div id="autoscan-status"></div>
+      </div>
     </div>
 
     <div id="playlist-pill">
@@ -1195,7 +1248,8 @@
     const likedCb = document.createElement('input');
     likedCb.type = 'checkbox';
     likedCb.value = 'liked';
-    likedCb.addEventListener('change', updateScanBtn);
+    likedCb.dataset.name = 'Liked Songs';
+    likedCb.addEventListener('change', () => { updateScanBtn(); updateAutoscanBtn(); });
     likedTile.appendChild(likedCb);
     likedTile.insertAdjacentHTML('beforeend', '<div class="tile-fallback">&#9829;</div><span>Liked Songs</span>');
     list.appendChild(likedTile);
@@ -1207,7 +1261,8 @@
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.value = p.url;
-      cb.addEventListener('change', updateScanBtn);
+      cb.dataset.name = p.name;
+      cb.addEventListener('change', () => { updateScanBtn(); updateAutoscanBtn(); });
       tile.appendChild(cb);
 
       if (p.image) {
@@ -1240,6 +1295,68 @@
     $id('connect-section').style.display = 'none';
     $id('playlist-picker').style.display = 'block';
     updateScanBtn();
+    loadAutoscanConfig();
+  }
+
+  // Auto-scan settings — load the saved weekly-scan selection (if any) and
+  // pre-check the matching tiles/checkbox once the playlist picker is rendered.
+  function loadAutoscanConfig() {
+    fetch('/api/autoscan')
+      .then(r => r.json())
+      .then(cfg => {
+        $id('autoscan-enabled').checked = !!cfg.enabled;
+        const sources = new Set(cfg.sources || []);
+        document.querySelectorAll('#playlist-list input[type="checkbox"]').forEach(cb => {
+          if (sources.has(cb.value)) cb.checked = true;
+        });
+        updateAutoscanBtn();
+      })
+      .catch(() => {});
+  }
+
+  // Enables the "Save Auto-scan Settings" button once there's something
+  // meaningful to save (the toggle is on and at least one source is picked,
+  // or it's being turned off).
+  function updateAutoscanBtn() {
+    const checked = document.querySelectorAll('#playlist-list input[type="checkbox"]:checked').length;
+    const enabled = $id('autoscan-enabled').checked;
+    $id('autoscan-save').disabled = enabled && checked === 0;
+    $id('autoscan-status').textContent = '';
+    $id('autoscan-status').className = '';
+  }
+
+  // Persist the current playlist-tile selection as the weekly auto-scan
+  // source list, along with the on/off toggle.
+  function saveAutoscan() {
+    const checked = Array.from(
+      document.querySelectorAll('#playlist-list input[type="checkbox"]:checked')
+    );
+    const sources = checked.map(cb => cb.value);
+    const labels  = {};
+    checked.forEach(cb => { if (cb.value !== 'liked') labels[cb.value] = cb.dataset.name || ''; });
+
+    const status = $id('autoscan-status');
+    status.textContent = 'Saving...';
+    status.className = '';
+
+    fetch('/api/autoscan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: $id('autoscan-enabled').checked, sources, labels }),
+    })
+      .then(r => r.json())
+      .then(cfg => {
+        if (cfg.enabled) {
+          status.textContent = 'Saved — runs every Sunday morning.';
+        } else {
+          status.textContent = 'Saved — auto-scan is off.';
+        }
+        status.className = 'success';
+      })
+      .catch(() => {
+        status.textContent = 'Could not save auto-scan settings.';
+        status.className = '';
+      });
   }
 
   // Concert cards — Bandsintown-style weekly groups

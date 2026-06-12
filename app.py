@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import smtplib
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -77,10 +78,15 @@ _SPOTIFY_PLAYLIST_PREFIX = "https://open.spotify.com/playlist/"
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1 MB — blocks oversized POSTs
 
-EMAILS_FILE   = Path(__file__).parent / "emails.json"
-PHONES_FILE   = Path(__file__).parent / "phones.json"
-MAIL_CFG_FILE = Path(__file__).parent / "mail_config.json"
+EMAILS_FILE    = Path(__file__).parent / "emails.json"
+PHONES_FILE    = Path(__file__).parent / "phones.json"
+MAIL_CFG_FILE  = Path(__file__).parent / "mail_config.json"
+AUTOSCAN_FILE  = Path(__file__).parent / "autoscan.json"
 SPOTIFY_PROFILE = Path.home() / ".concert-finder-spotify-profile"
+
+# Weekly auto-scan schedule — Sunday morning, local server time.
+AUTOSCAN_WEEKDAY = 6   # Monday=0 ... Sunday=6
+AUTOSCAN_HOUR    = 9   # 9 AM
 
 SMS_GATEWAYS = {
     "AT&T":        "@txt.att.net",
@@ -1423,6 +1429,137 @@ def scan_multi_stream():
     return _sse_response(generate())
 
 
+# Weekly auto-scan
+#
+# Runs unattended (no SSE client) every Sunday morning, so it drains the
+# same harvest/scrape generators used by /api/scan-multi to completion
+# rather than streaming their progress anywhere.
+
+def _drain_generator(gen):
+    """
+    Exhaust a generator that yields SSE strings (meant for a browser client)
+    and return its StopIteration.value. Used to run the harvest/scrape
+    generators from the auto-scan job, which has no SSE connection to stream
+    progress to.
+    """
+    try:
+        while True:
+            next(gen)
+    except StopIteration as stop:
+        return stop.value
+
+
+def _run_autoscan_once():
+    """
+    Run the configured weekly auto-scan: harvest artists from every saved
+    source (playlists and/or Liked Songs), search Last.fm for upcoming shows
+    in the watched cities, and email/text the combined results to whoever's
+    configured in /api/emails and /api/phones.
+
+    Only upcoming shows are ever included — find_concerts() already drops
+    anything before today, so "this week and up" falls out naturally; this
+    just runs that same search on a weekly schedule instead of on demand.
+
+    Never raises: any failure is logged and the run is skipped, so one bad
+    week (Spotify logged out, Last.fm down, SMTP misconfigured, etc.)
+    doesn't take down the scheduler thread or prevent next Sunday's run.
+    """
+    cfg = _load_autoscan()
+    if not cfg.get("enabled"):
+        log.info("Autoscan: skipped (not enabled)")
+        return
+    sources = cfg.get("sources", [])
+    if not sources:
+        log.info("Autoscan: skipped (no playlists/Liked Songs selected)")
+        return
+
+    log.info("Autoscan: starting weekly scan of %d source(s)", len(sources))
+    combined_artists: dict = {}
+    names: list = []
+
+    for source in sources:
+        try:
+            if source == "liked":
+                artists = _drain_generator(_harvest_liked_songs())
+                combined_artists.update(artists)
+                names.append("Liked Songs")
+            else:
+                playlist_name, _, artists = _drain_generator(scrape_spotify_playlist(source, authed=True))
+                combined_artists.update(artists)
+                names.append(cfg.get("labels", {}).get(source) or playlist_name)
+        except Exception as exc:
+            log.error("Autoscan: source %s failed: %s", source, exc)
+
+    if not combined_artists:
+        log.warning("Autoscan: no artists found across configured sources — skipping send")
+        return
+
+    results: list = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONCERT_WORKERS) as executor:
+        future_to_artist = {executor.submit(find_concerts, a): a for a in combined_artists}
+        for future in concurrent.futures.as_completed(future_to_artist):
+            artist = future_to_artist[future]
+            try:
+                concerts = future.result()
+            except Exception as exc:
+                log.debug("Autoscan: lookup failed for %s: %s", artist, exc)
+                concerts = []
+            if concerts:
+                results.append({"artist": artist, "concerts": concerts})
+
+    flat = _flatten_results(results)
+    if not flat:
+        log.info("Autoscan: no upcoming shows found this week — skipping send")
+        return
+
+    if len(names) <= 3:
+        label = ", ".join(names)
+    else:
+        label = f"{names[0]} + {len(names) - 1} more"
+
+    result, _ = _send_concert_digest(flat, f"Weekly Digest — {label}")
+    if "error" in result:
+        log.error("Autoscan: send failed: %s", result["error"])
+    else:
+        log.info(
+            "Autoscan: sent weekly digest (%d show%s) to %d recipient(s), %d error(s)",
+            len(flat), "" if len(flat) == 1 else "s", len(result["sent"]), len(result["errors"]),
+        )
+
+
+def _seconds_until_next_autoscan() -> float:
+    """Seconds from now until the next AUTOSCAN_WEEKDAY at AUTOSCAN_HOUR:00 local time."""
+    now = datetime.now()
+    days_ahead = (AUTOSCAN_WEEKDAY - now.weekday()) % 7
+    target = (now + timedelta(days=days_ahead)).replace(
+        hour=AUTOSCAN_HOUR, minute=0, second=0, microsecond=0
+    )
+    if target <= now:
+        target += timedelta(days=7)
+    return (target - now).total_seconds()
+
+
+def _autoscan_loop():
+    """
+    Background loop: sleeps until the next scheduled run, performs it, then
+    sleeps a minute (so a run that finishes within the same minute it started
+    can't immediately re-trigger) before computing the next one.
+    """
+    while True:
+        wait_s = _seconds_until_next_autoscan()
+        log.info("Autoscan: next run in %.1f hour(s)", wait_s / 3600)
+        time.sleep(wait_s)
+        try:
+            _run_autoscan_once()
+        except Exception:
+            log.exception("Autoscan: unexpected failure during scheduled run")
+        time.sleep(60)
+
+
+def _start_autoscan_thread():
+    threading.Thread(target=_autoscan_loop, name="autoscan", daemon=True).start()
+
+
 # Storage helpers
 
 def _read_json(path: Path, default):
@@ -1455,6 +1592,15 @@ def _load_mail_cfg() -> dict:
 
 def _save_mail_cfg(cfg: dict):
     _write_json(MAIL_CFG_FILE, cfg)
+
+_AUTOSCAN_DEFAULT = {"enabled": False, "sources": [], "labels": {}}
+
+def _load_autoscan() -> dict:
+    cfg = _read_json(AUTOSCAN_FILE, _AUTOSCAN_DEFAULT)
+    return {**_AUTOSCAN_DEFAULT, **cfg}
+
+def _save_autoscan(cfg: dict):
+    _write_json(AUTOSCAN_FILE, cfg)
 
 
 # Routes — /api/emails
@@ -1557,6 +1703,39 @@ def save_mail_cfg():
             cfg[key] = data[key]
     _save_mail_cfg(cfg)
     return jsonify({"ok": True, "env_override": bool(os.environ.get("SMTP_PASS"))})
+
+
+# Routes — /api/autoscan
+#
+# Lets the user pick which playlists / Liked Songs should be scanned
+# automatically every Sunday morning, with the results emailed/texted to
+# whoever's configured in /api/emails and /api/phones. The actual weekly
+# run is driven by _autoscan_loop (a background thread started in
+# __main__), which calls _run_autoscan_once.
+
+@app.route("/api/autoscan", methods=["GET"])
+def get_autoscan():
+    return jsonify(_load_autoscan())
+
+
+@app.route("/api/autoscan", methods=["POST"])
+def save_autoscan():
+    data    = request.json or {}
+    sources = [s for s in data.get("sources", []) if isinstance(s, str) and s]
+    labels  = {
+        k: v for k, v in (data.get("labels") or {}).items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+    cfg = {
+        "enabled": bool(data.get("enabled")),
+        "sources": sources,
+        # Display names for playlist URLs, so the weekly digest's subject
+        # line ("Weekly Digest — My Road Trip Mix") doesn't have to re-derive
+        # them from a live Spotify page at send time.
+        "labels":  {k: v for k, v in labels.items() if k in sources},
+    }
+    _save_autoscan(cfg)
+    return jsonify(cfg)
 
 
 # Email + SMS builders
@@ -1713,39 +1892,37 @@ def _build_sms_text(flat: list, playlist_name: str) -> str:
 
 # Routes — /api/send-report
 
-@app.route("/api/send-report", methods=["POST"])
-def send_report():
-    data          = request.json or {}
-    results       = data.get("results", [])
-    playlist_name = data.get("playlist_name", "My Playlist")
+def _send_concert_digest(flat: list, playlist_name: str) -> tuple:
+    """
+    Build the email/SMS bodies for `flat` concerts and send them to every
+    configured recipient over a single SMTP connection.
 
+    Returns (result_dict, status_code). result_dict is either
+    {"sent": [...], "errors": [...]} on success (errors may be non-empty if
+    some individual recipients failed), or {"error": "..."} if recipients,
+    SMTP, or the concert list aren't set up — paired with the appropriate
+    HTTP status code (400 for configuration problems, 500 for a connection
+    failure).
+
+    Shared by the manual "Send Report" button (/api/send-report) and the
+    weekly auto-scan job (_run_autoscan_once) — neither has to duplicate the
+    SMTP/SMS-gateway plumbing.
+    """
     emails = _load_emails()
     phones = _load_phones()
     if not emails and not phones:
-        return jsonify({"error": "No email or phone recipients configured"}), 400
+        return {"error": "No email or phone recipients configured"}, 400
 
     cfg       = _load_mail_cfg()
     smtp_pass = _smtp_password(cfg)
     if not cfg.get("smtp_user") or not smtp_pass:
-        return jsonify({"error": "SMTP not configured — open Email Settings"}), 400
-
-    if not results:
-        return jsonify({"error": "No concert results to send"}), 400
-
-    # Build both message formats from a single flat list (avoids recomputing twice).
-    # `results` is client-supplied JSON — guard against malformed shapes (missing
-    # "artist"/"concerts" keys) so a bad payload returns a 400 instead of a 500.
-    try:
-        flat = _flatten_results(results)
-    except (KeyError, TypeError) as exc:
-        log.warning("Malformed results payload in send-report: %s", exc)
-        return jsonify({"error": "Malformed results data"}), 400
+        return {"error": "SMTP not configured — open Email Settings"}, 400
 
     if not flat:
-        return jsonify({"error": "No concert results to send"}), 400
+        return {"error": "No concert results to send"}, 400
 
-    html_body = _build_email_html(flat, playlist_name)
-    sms_body  = _build_sms_text(flat, playlist_name)
+    html_body  = _build_email_html(flat, playlist_name)
+    sms_body   = _build_sms_text(flat, playlist_name)
     show_count = len(flat)
     subject    = f"{show_count} upcoming show{'s' if show_count != 1 else ''} — {playlist_name}"
 
@@ -1792,10 +1969,10 @@ def send_report():
     except (smtplib.SMTPException, OSError) as exc:
         # Connection-level failures (bad host, refused connection, DNS
         # failure, TLS errors) raise OSError subclasses, not SMTPException —
-        # catch both so the user always gets a JSON error instead of a
-        # raw 500 page.
+        # catch both so the caller always gets a clean error instead of a
+        # raw exception.
         log.error("SMTP connection failed: %s", exc)
-        return jsonify({"error": f"SMTP connection failed: {exc}"}), 500
+        return {"error": f"SMTP connection failed: {exc}"}, 500
     finally:
         if server:
             try:
@@ -1803,10 +1980,40 @@ def send_report():
             except Exception:
                 pass
 
-    return jsonify({"sent": sent, "errors": errors})
+    return {"sent": sent, "errors": errors}, 200
+
+
+@app.route("/api/send-report", methods=["POST"])
+def send_report():
+    data          = request.json or {}
+    results       = data.get("results", [])
+    playlist_name = data.get("playlist_name", "My Playlist")
+
+    if not results:
+        return jsonify({"error": "No concert results to send"}), 400
+
+    # `results` is client-supplied JSON — guard against malformed shapes
+    # (missing "artist"/"concerts" keys) so a bad payload returns a 400
+    # instead of a 500.
+    try:
+        flat = _flatten_results(results)
+    except (KeyError, TypeError) as exc:
+        log.warning("Malformed results payload in send-report: %s", exc)
+        return jsonify({"error": "Malformed results data"}), 400
+
+    if not flat:
+        return jsonify({"error": "No concert results to send"}), 400
+
+    result, status = _send_concert_digest(flat, playlist_name)
+    return jsonify(result), status
 
 
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     port  = int(os.environ.get("PORT", 5001))
+    # Skip starting the autoscan thread in the debug reloader's parent
+    # process — only the child (WERKZEUG_RUN_MAIN=true) actually serves
+    # requests, and we'd otherwise end up with two competing schedulers.
+    if not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        _start_autoscan_thread()
     app.run(debug=debug, host="0.0.0.0", port=port)

@@ -9,3 +9,4 @@ run_app.sh
 emails.json
 phones.json
 mail_config.json
+autoscan.json
