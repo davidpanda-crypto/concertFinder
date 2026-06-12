@@ -1522,11 +1522,12 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
             f'  <span style="background:#a855f722;color:#a855f7;padding:2px 8px;'
             f'border-radius:4px;font-size:12px;font-weight:700">{html.escape(c.get("city",""))}</span>'
             f'</td>'
+            # Ticket link points to StubHub's search results — Last.fm is
+            # only used in the background to find/verify the show itself,
+            # not surfaced as a ticket source.
             f'<td style="padding:10px 12px;white-space:nowrap">'
-            f'  <a href="{_safe_url(c.get("tickets_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'
+            f'  <a href="{_safe_url(c.get("stubhub_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'
             f'color:#fff;padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">Tickets</a>'
-            f'  <a href="{_safe_url(c.get("stubhub_url",""))}" style="margin-left:6px;border:1px solid #a855f7;color:#a855f7;'
-            f'padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">StubHub</a>'
             f'</td>'
             '</tr>'
         )

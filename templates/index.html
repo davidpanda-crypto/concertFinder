@@ -383,16 +383,9 @@
       vertical-align: middle; letter-spacing: 0.02em;
     }
 
-    .tix-links {
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-    }
     .tix-btn {
       flex-shrink: 0;
       display: inline-block;
-      text-align: center;
       background: linear-gradient(120deg, var(--accent), var(--accent2));
       color: #fff; text-decoration: none;
       padding: 0.5rem 1.1rem; border-radius: 6px;
@@ -401,16 +394,6 @@
       transition: opacity 0.15s, transform 0.15s;
     }
     .tix-btn:hover { opacity: 0.88; transform: translateY(-1px); }
-    .tix-btn-outline {
-      background: transparent;
-      color: var(--accent);
-      border: 1px solid rgba(168,85,247,0.4);
-      box-shadow: none;
-    }
-    .tix-btn-outline:hover {
-      background: rgba(168,85,247,0.08);
-      opacity: 1;
-    }
 
     /* States */
     .empty-state {
@@ -638,7 +621,7 @@
       header h1 { font-size: 1.6rem; }
       .add-row, .smtp-grid { flex-direction: column; }
       .show-card { flex-wrap: wrap; }
-      .tix-links { margin-left: auto; }
+      .tix-btn { margin-left: auto; }
       .quicknav-brand { display: none; }
     }
   </style>
@@ -1362,29 +1345,17 @@
 
     card.appendChild(info);
 
-    const links = document.createElement('div');
-    links.className = 'tix-links';
-
+    // Ticket link points to StubHub's search results — Last.fm is only used
+    // in the background to find/verify the show itself, not surfaced as a
+    // ticket source.
     const tix = document.createElement('a');
     tix.className = 'tix-btn';
-    tix.href = safeUrl(c.tickets_url || '#');
+    tix.href = safeUrl(c.stubhub_url || '#');
     tix.target = '_blank';
     tix.rel = 'noopener';
+    tix.title = 'Search StubHub for this artist & venue';
     tix.textContent = 'Get Tickets';
-    links.appendChild(tix);
-
-    if (c.stubhub_url) {
-      const stub = document.createElement('a');
-      stub.className = 'tix-btn tix-btn-outline';
-      stub.href = safeUrl(c.stubhub_url);
-      stub.target = '_blank';
-      stub.rel = 'noopener';
-      stub.textContent = 'StubHub';
-      stub.title = 'Search StubHub for this artist & venue';
-      links.appendChild(stub);
-    }
-
-    card.appendChild(links);
+    card.appendChild(tix);
 
     return card;
   }
@@ -1410,8 +1381,7 @@
       lines.push('  Date  : ' + (c.date || 'TBA') + (c.time ? '  ' + c.time : ''));
       lines.push('  City  : ' + (c.city || ''));
       lines.push('  Venue : ' + (c.venue || ''));
-      lines.push('  Link  : ' + (c.tickets_url || ''));
-      if (c.stubhub_url) lines.push('  StubHub: ' + c.stubhub_url);
+      lines.push('  Tickets: ' + (c.stubhub_url || ''));
       lines.push('-'.repeat(60));
     });
 
