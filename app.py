@@ -86,7 +86,7 @@ SPOTIFY_PROFILE = Path.home() / ".concert-finder-spotify-profile"
 
 # Weekly auto-scan schedule — Sunday morning, local server time.
 AUTOSCAN_WEEKDAY = 6   # Monday=0 ... Sunday=6
-AUTOSCAN_HOUR    = 9   # 9 AM
+AUTOSCAN_HOUR    = 10  # 10 AM
 
 SMS_GATEWAYS = {
     "AT&T":        "@txt.att.net",
