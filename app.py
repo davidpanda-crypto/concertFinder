@@ -862,10 +862,21 @@ def _artist_slugs(artist_name: str) -> list:
 
 
 def _fmt_datetime(iso: str) -> tuple:
-    """Parse an ISO datetime string into (display_date, display_time)."""
+    """
+    Parse an ISO datetime string into (display_date, display_time).
+
+    Last.fm's events list never carries an actual show time — every row's
+    datetime is midnight (e.g. "2026-07-19T00:00:00") regardless of when
+    the show actually starts. Showing that as "12:00 AM" would be a fake,
+    misleading time, so a midnight time component is treated as "no time
+    given" and time_disp is left blank.
+    """
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return dt.strftime("%A, %B %-d, %Y"), dt.strftime("%-I:%M %p")
+        date_disp = dt.strftime("%A, %B %-d, %Y")
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+            return date_disp, ""
+        return date_disp, dt.strftime("%-I:%M %p")
     except Exception:
         return iso, ""
 
@@ -913,10 +924,15 @@ def find_concerts(artist_name: str) -> list:
             date_raw = time_el.get("datetime", "") if time_el else ""
 
             # Skip shows that have already happened — we only want upcoming dates.
+            # Compare by date only (not full datetime): Last.fm's events list
+            # has no real time-of-day (always midnight, see _fmt_datetime),
+            # and comparing that naive midnight against an offset-aware
+            # datetime.now(timezone.utc) raises TypeError — which used to be
+            # silently swallowed below, so past shows were never filtered.
             if date_raw:
                 try:
-                    event_dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-                    if event_dt < datetime.now(timezone.utc):
+                    event_date = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).date()
+                    if event_date < datetime.now(timezone.utc).date():
                         continue
                 except Exception:
                     pass
