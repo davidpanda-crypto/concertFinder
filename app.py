@@ -275,6 +275,47 @@ _TRACKLIST_CONTAINER_SELECTORS = [
 # never bother searching Last.fm for them.
 _NON_ARTIST_NAMES = {"various artists"}
 
+# How close the highest rendered row index needs to get to the grid's total
+# row count (aria-rowcount) for the scroll loop to be considered "reached
+# the bottom". Spotify's virtualized list keeps a handful of rows rendered
+# above/below the viewport, so the max rendered index lags the true total by
+# a small, variable amount even once scrolling is fully done.
+_ROW_COUNT_TOLERANCE = 15
+
+
+def _grid_row_count(driver) -> Optional[int]:
+    """
+    Return the playlist tracklist's total row count via the grid's
+    `aria-rowcount` attribute (Spotify sets this on the `[role='grid']`
+    container to the track count, often +1 for the header row), or None if
+    it can't be determined. Used as a sanity check that the scroll loop
+    actually reached the end of a large playlist rather than stopping early.
+    """
+    for sel in _TRACKLIST_CONTAINER_SELECTORS:
+        try:
+            el  = driver.find_element(By.CSS_SELECTOR, sel)
+            val = el.get_attribute("aria-rowcount")
+            if val and val.isdigit():
+                return int(val)
+        except Exception:
+            continue
+    return None
+
+
+def _grid_max_row_index(driver) -> Optional[int]:
+    """
+    Return the highest `aria-rowindex` currently rendered in the tracklist,
+    or None if no indexed rows are present. Paired with _grid_row_count to
+    confirm the harvest scrolled all the way through the playlist.
+    """
+    try:
+        elements = driver.find_elements(By.CSS_SELECTOR, "[aria-rowindex]")
+        indices = [int(v) for v in (e.get_attribute("aria-rowindex") for e in elements)
+                   if v and v.isdigit()]
+        return max(indices) if indices else None
+    except Exception:
+        return None
+
 
 def _make_driver(headless: bool = True, profile_dir: Optional[Path] = None) -> webdriver.Chrome:
     """
@@ -688,10 +729,27 @@ def _harvest_with_progress(driver, label: str, harvest_fn=_harvest_artists, max_
         try:
             count = next(gen)
         except StopIteration as stop:
-            return stop.value
+            result = stop.value
+            break
         if count and count != last_emitted:
             yield sse("status", {"message": f"{label}... {count} found so far"})
             last_emitted = count
+
+    # Sanity-check that the scroll loop actually reached the bottom of a
+    # large tracklist rather than stopping early — e.g. if the page momentarily
+    # stopped lazy-loading rows for STABLE_ROUNDS in a row well before the end.
+    # This only ever adds an informational note; if the grid's row count can't
+    # be read (different Spotify layout, Liked Songs, etc.) it's silently skipped.
+    if harvest_fn is _harvest_artists:
+        total   = _grid_row_count(driver)
+        reached = _grid_max_row_index(driver)
+        if total and reached and reached < total - _ROW_COUNT_TOLERANCE:
+            yield sse("status", {
+                "message": f"Note: scrolled through row {reached} of {total} — "
+                           f"re-run the scan if this playlist looks incomplete."
+            })
+
+    return result
 
 
 def _harvest_playlists(driver, scope=None) -> dict:
