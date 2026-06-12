@@ -176,7 +176,8 @@ WATCH_CITIES = [
         # Arena in Fairfax VA, FedExField/Northwest Stadium in Landover MD,
         # etc.). Several of these names collide with same-named places
         # elsewhere in the US (Springfield, Columbia, Vienna, Fairfax,
-        # Sterling...), so they're listed in _AMBIGUOUS_CITY_KEYWORDS and
+        # Sterling, College Park, Rockville, Largo, Leesburg, Woodbridge,
+        # Bowie...), so they're listed in _AMBIGUOUS_CITY_KEYWORDS and
         # verified via the venue's ZIP code (_verify_dc_area) before being
         # accepted — see _DC_AREA_ZIP_PREFIXES.
         "keywords": [
@@ -797,6 +798,12 @@ _AMBIGUOUS_CITY_KEYWORDS = {
     "vienna",                       # also Austria / GA / IL / WV
     "fairfax",                      # also CA
     "sterling",                     # also CO/IL
+    "college park",                 # also College Park, GA (Atlanta suburb)
+    "rockville",                    # also Rockville, FL ("Welcome to Rockville" festival, Daytona)
+    "largo",                        # also Largo, FL
+    "leesburg",                     # also Leesburg, FL
+    "woodbridge",                   # also Woodbridge, NJ
+    "bowie",                        # also Bowie, TX / AZ
 }
 
 # US ZIP code prefixes covering DC and its nearby Maryland/Virginia suburbs,

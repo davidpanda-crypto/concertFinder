@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "concert-finder",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["/Users/DavidPanda/Documents/New project/run_app.sh"],
+      "port": 5001
+    }
+  ]
+}
