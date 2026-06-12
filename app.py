@@ -4,7 +4,7 @@ Concert Finder — no API credentials required.
 
 1. Reads artists from any public Spotify playlist (or Liked Songs) via headless Chrome.
 2. Searches Last.fm (server-rendered, no auth) for upcoming shows in
-   New York City, Washington DC, and Prince Edward Island.
+   New York City, Washington DC, Prince Edward Island, and Halifax, Nova Scotia.
 3. Streams results live to the browser via Server-Sent Events.
 4. Sends HTML email reports and SMS texts to a configurable recipient list.
 
@@ -127,6 +127,11 @@ WATCH_CITIES = [
         "label": "Washington DC",
         "keywords": ["washington dc", "arlington", "alexandria"],
         "country": "united states",
+    },
+    {
+        "label": "Halifax, Nova Scotia",
+        "keywords": ["halifax", "nova scotia", "dartmouth"],
+        "country": "canada",
     },
 ]
 
