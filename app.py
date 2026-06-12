@@ -99,7 +99,16 @@ BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-BROWSER_HEADERS = {"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9"}
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept-Language": "en-US,en;q=0.9",
+    # A real browser navigating to a page sends a full Accept header (not
+    # "*/*") and a Referer from in-site navigation — matching that reduces
+    # the odds of tripping Last.fm's bot detection (which returns a
+    # "Rate Limited" 406 page) during scans.
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.last.fm/",
+}
 
 # Shared session for Last.fm/Spotify HTTP lookups — reuses connections (TLS
 # handshake + TCP) across the hundreds of requests a large-library scan
@@ -111,6 +120,41 @@ _HTTP.headers.update(BROWSER_HEADERS)
 _HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16)
 _HTTP.mount("https://", _HTTP_ADAPTER)
 _HTTP.mount("http://", _HTTP_ADAPTER)
+
+# Status codes worth a brief retry: Last.fm occasionally returns a transient
+# "Rate Limited" 406 page (esp. under the concurrent lookups a large-library
+# scan performs) or a 429/5xx — without a retry, that single blip would
+# silently read as "no concerts found" for that artist.
+_RETRY_STATUS_CODES = {406, 429, 500, 502, 503, 504}
+_HTTP_MAX_RETRIES   = 3
+_HTTP_RETRY_DELAY_S = 1.5
+
+
+def _http_get(url: str, **kwargs):
+    """
+    requests.Session.get() with a couple of short retries on transient
+    rate-limit / server-error responses (see _RETRY_STATUS_CODES). Returns
+    the final Response (which may still carry a bad status code if every
+    attempt was rate-limited) or raises the last RequestException if every
+    attempt failed at the connection level.
+    """
+    kwargs.setdefault("timeout", HTTP_TIMEOUT_S)
+    last_exc = None
+    resp = None
+    for attempt in range(_HTTP_MAX_RETRIES + 1):
+        try:
+            resp = _HTTP.get(url, **kwargs)
+            last_exc = None
+            if resp.status_code not in _RETRY_STATUS_CODES:
+                return resp
+        except requests.RequestException as exc:
+            last_exc = exc
+            resp = None
+        if attempt < _HTTP_MAX_RETRIES:
+            time.sleep(_HTTP_RETRY_DELAY_S * (attempt + 1))
+    if last_exc:
+        raise last_exc
+    return resp
 
 WATCH_CITIES = [
     {
@@ -779,7 +823,7 @@ def _verify_dc_area(event_url: str) -> bool:
     if not event_url:
         return False
     try:
-        resp = _HTTP.get(event_url, timeout=HTTP_TIMEOUT_S)
+        resp = _http_get(event_url)
     except requests.RequestException:
         return False
     if resp.status_code != 200:
@@ -834,10 +878,7 @@ def find_concerts(artist_name: str) -> list:
     """
     for slug in _artist_slugs(artist_name):
         try:
-            resp = _HTTP.get(
-                f"https://www.last.fm/music/{slug}/+events",
-                timeout=HTTP_TIMEOUT_S,
-            )
+            resp = _http_get(f"https://www.last.fm/music/{slug}/+events")
         except requests.RequestException as exc:
             log.debug("Last.fm request failed for %s: %s", artist_name, exc)
             continue
