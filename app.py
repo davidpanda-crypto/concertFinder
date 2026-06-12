@@ -170,7 +170,26 @@ WATCH_CITIES = [
     },
     {
         "label": "Washington DC",
-        "keywords": ["washington dc", "arlington", "alexandria"],
+        # Includes nearby Maryland/Virginia suburbs that regularly host
+        # shows close to DC (Merriweather Post Pavilion in Columbia MD,
+        # Jiffy Lube Live in Bristow VA, Wolf Trap in Vienna VA, EagleBank
+        # Arena in Fairfax VA, FedExField/Northwest Stadium in Landover MD,
+        # etc.). Several of these names collide with same-named places
+        # elsewhere in the US (Springfield, Columbia, Vienna, Fairfax,
+        # Sterling...), so they're listed in _AMBIGUOUS_CITY_KEYWORDS and
+        # verified via the venue's ZIP code (_verify_dc_area) before being
+        # accepted — see _DC_AREA_ZIP_PREFIXES.
+        "keywords": [
+            "washington dc", "arlington", "alexandria",
+            # Maryland suburbs
+            "columbia", "colombia", "silver spring", "bethesda", "rockville",
+            "gaithersburg", "landover", "largo", "hyattsville", "college park",
+            "greenbelt", "bowie", "national harbor",
+            # Northern Virginia suburbs
+            "vienna", "fairfax", "tysons", "reston", "herndon", "manassas",
+            "woodbridge", "bristow", "springfield", "sterling", "ashburn",
+            "leesburg",
+        ],
         "country": "united states",
     },
     {
@@ -768,13 +787,30 @@ def scrape_spotify_playlist(playlist_url: str, authed: bool = False):
 # Last.fm venue addresses are just "<city>, <country>" with no state/region,
 # so a handful of city keywords collide with same-named places elsewhere
 # (e.g. "Arlington, United States" could be Arlington, VA — near DC — or
-# Arlington, TX, home of AT&T Stadium). Matches on these keywords are
+# Arlington, TX, home of AT&T Stadium; "Columbia, United States" could be
+# Columbia, MD or Columbia, SC/MO). Matches on these keywords are
 # provisional and must be confirmed via _verify_dc_area() before acceptance.
-_AMBIGUOUS_CITY_KEYWORDS = {"arlington", "alexandria"}
+_AMBIGUOUS_CITY_KEYWORDS = {
+    "arlington", "alexandria",      # also TX / LA, etc.
+    "columbia", "colombia",         # also SC/MO; "Colombia" is a Last.fm typo seen for Columbia, MD
+    "springfield",                  # MA/IL/MO/OH...
+    "vienna",                       # also Austria / GA / IL / WV
+    "fairfax",                      # also CA
+    "sterling",                     # also CO/IL
+}
 
-# US ZIP code prefixes covering DC (20xxx) and the Arlington/Alexandria, VA
-# suburbs (222xx / 223xx) that count as "Washington DC" for our purposes.
-_DC_AREA_ZIP_PREFIXES = ("20", "222", "223")
+# US ZIP code prefixes covering DC and its nearby Maryland/Virginia suburbs,
+# for "Washington DC" matches:
+#   20x        DC itself, plus Montgomery/PG county MD suburbs (Silver
+#               Spring, Bethesda, Rockville, Landover, National Harbor) and
+#               several NoVA suburbs that share DC's 20xxx block (Reston,
+#               Herndon, Manassas, Sterling, Ashburn, Leesburg, Bristow)
+#   210x/211x  Columbia, MD (Merriweather Post Pavilion)
+#   220x       Fairfax, VA (EagleBank Arena)
+#   221x       Springfield / Tysons / Vienna, VA (Wolf Trap)
+#   222x       Arlington, VA
+#   223x       Alexandria, VA
+_DC_AREA_ZIP_PREFIXES = ("20", "210", "211", "220", "221", "222", "223")
 
 
 def _city_for_address(address: str) -> tuple:
