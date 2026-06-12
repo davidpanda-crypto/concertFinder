@@ -862,6 +862,22 @@ def _artist_slugs(artist_name: str) -> list:
     return slugs
 
 
+def _stubhub_search_url(artist_name: str, venue: str) -> str:
+    """
+    Best-effort StubHub search link for a show.
+
+    StubHub's ticket inventory API is partner-only — there's no way to
+    deep-link to (or verify) a specific listing without credentials, which
+    would break this project's no-API-key design. Instead this opens
+    StubHub's own search results for "<artist> <venue>", so the user can
+    see real-time StubHub pricing/availability and confirm it's the right
+    event themselves, while the date/venue/city shown in this app still
+    comes from the verified Last.fm match.
+    """
+    query = " ".join(part for part in (artist_name, venue) if part).strip()
+    return "https://www.stubhub.com/find/s/?q=" + urllib.parse.quote(query)
+
+
 def _fmt_datetime(iso: str) -> tuple:
     """
     Parse an ISO datetime string into (display_date, display_time).
@@ -954,6 +970,7 @@ def find_concerts(artist_name: str) -> list:
                 "venue":       venue or city,
                 "city":        city,
                 "tickets_url": url,
+                "stubhub_url": _stubhub_search_url(artist_name, venue),
             })
 
         # Deduplicate by (date, normalised venue) and return sorted by date
@@ -1505,9 +1522,11 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
             f'  <span style="background:#a855f722;color:#a855f7;padding:2px 8px;'
             f'border-radius:4px;font-size:12px;font-weight:700">{html.escape(c.get("city",""))}</span>'
             f'</td>'
-            f'<td style="padding:10px 12px">'
+            f'<td style="padding:10px 12px;white-space:nowrap">'
             f'  <a href="{_safe_url(c.get("tickets_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'
             f'color:#fff;padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">Tickets</a>'
+            f'  <a href="{_safe_url(c.get("stubhub_url",""))}" style="margin-left:6px;border:1px solid #a855f7;color:#a855f7;'
+            f'padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">StubHub</a>'
             f'</td>'
             '</tr>'
         )
