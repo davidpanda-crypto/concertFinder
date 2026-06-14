@@ -86,7 +86,8 @@ SPOTIFY_PROFILE = Path.home() / ".concert-finder-spotify-profile"
 
 # Weekly auto-scan schedule — Sunday morning, local server time.
 AUTOSCAN_WEEKDAY = 6   # Monday=0 ... Sunday=6
-AUTOSCAN_HOUR    = 10  # 10 AM
+AUTOSCAN_HOUR    = 11  # 11:15 AM
+AUTOSCAN_MINUTE  = 15
 
 SMS_GATEWAYS = {
     "AT&T":        "@txt.att.net",
@@ -1528,11 +1529,11 @@ def _run_autoscan_once():
 
 
 def _seconds_until_next_autoscan() -> float:
-    """Seconds from now until the next AUTOSCAN_WEEKDAY at AUTOSCAN_HOUR:00 local time."""
+    """Seconds from now until the next AUTOSCAN_WEEKDAY at AUTOSCAN_HOUR:AUTOSCAN_MINUTE local time."""
     now = datetime.now()
     days_ahead = (AUTOSCAN_WEEKDAY - now.weekday()) % 7
     target = (now + timedelta(days=days_ahead)).replace(
-        hour=AUTOSCAN_HOUR, minute=0, second=0, microsecond=0
+        hour=AUTOSCAN_HOUR, minute=AUTOSCAN_MINUTE, second=0, microsecond=0
     )
     if target <= now:
         target += timedelta(days=7)
