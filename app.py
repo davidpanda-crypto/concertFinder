@@ -941,7 +941,7 @@ def _city_for_address(address: str) -> tuple:
 # Resale marketplaces known for steep markups over face value and/or
 # sketchy business practices (chargeback disputes, fake-listing
 # complaints, etc.). If an event page's "official" link points at one of
-# these, it's skipped in favor of the next candidate (or the StubHub
+# these, it's skipped in favor of the next candidate (or the Google ticket
 # search fallback) — the goal is to land users on the venue's own site or
 # a primary ticketing vendor selling at face value, not an inflated resale
 # listing.
