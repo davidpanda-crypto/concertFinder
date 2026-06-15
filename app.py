@@ -1103,20 +1103,21 @@ def _artist_name_matches(page_name: str, requested: str) -> bool:
     return a == b or a.startswith(b + " ") or b.startswith(a + " ")
 
 
-def _stubhub_search_url(artist_name: str, venue: str) -> str:
+def _fallback_ticket_url(artist_name: str, venue: str) -> str:
     """
-    Best-effort StubHub search link for a show.
+    Best-effort ticket search link for a show when Last.fm's event page
+    doesn't provide an official venue/vendor link (official_url).
 
-    StubHub's ticket inventory API is partner-only — there's no way to
-    deep-link to (or verify) a specific listing without credentials, which
-    would break this project's no-API-key design. Instead this opens
-    StubHub's own search results for "<artist> <venue>", so the user can
-    see real-time StubHub pricing/availability and confirm it's the right
+    Points to Ticketmaster's search results for "<artist> <venue>".
+    Ticketmaster is a primary, face-value ticketing vendor for most venues —
+    no account/API key needed to deep-link to a search, and it's generally
+    safer and less markup-prone than a resale marketplace like StubHub or
+    Viagogo. The user can confirm pricing/availability and pick the right
     event themselves, while the date/venue/city shown in this app still
     comes from the verified Last.fm match.
     """
     query = " ".join(part for part in (artist_name, venue) if part).strip()
-    return "https://www.stubhub.com/find/s/?q=" + urllib.parse.quote(query)
+    return "https://www.ticketmaster.com/search?q=" + urllib.parse.quote(query)
 
 
 def _fmt_datetime(iso: str) -> tuple:
@@ -1250,9 +1251,9 @@ def find_concerts(artist_name: str) -> list:
                 "tickets_url": url,
                 # Official venue/ticket-vendor link for this specific show,
                 # when Last.fm's event page provides one. Falls back to a
-                # generic StubHub search (stubhub_url) when absent.
+                # Ticketmaster search (fallback_url) when absent.
                 "official_url": official_url or "",
-                "stubhub_url": _stubhub_search_url(artist_name, venue),
+                "fallback_url": _fallback_ticket_url(artist_name, venue),
             })
 
         # Deduplicate by (date, normalised venue) and return sorted by date
@@ -2162,10 +2163,10 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
             f'border-radius:4px;font-size:12px;font-weight:700">{html.escape(c.get("city",""))}</span>'
             f'</td>'
             # Prefer the official venue/ticket-vendor link for this specific
-            # show (from Last.fm's event page); fall back to a generic
-            # StubHub search if Last.fm didn't provide one.
+            # show (from Last.fm's event page); fall back to a Ticketmaster
+            # search if Last.fm didn't provide one.
             f'<td style="padding:10px 12px;white-space:nowrap">'
-            f'  <a href="{_safe_url(c.get("official_url") or c.get("stubhub_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'
+            f'  <a href="{_safe_url(c.get("official_url") or c.get("fallback_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'
             f'color:#fff;padding:5px 12px;border-radius:5px;text-decoration:none;font-size:12px;font-weight:700">Tickets</a>'
             f'</td>'
             '</tr>'

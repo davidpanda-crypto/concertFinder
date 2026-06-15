@@ -1593,17 +1593,17 @@
     card.appendChild(info);
 
     // Prefer the official venue/ticket-vendor link for this specific show
-    // (pulled from the show's Last.fm event page); fall back to a generic
-    // StubHub search if Last.fm didn't provide one.
+    // (pulled from the show's Last.fm event page); fall back to a
+    // Ticketmaster search if Last.fm didn't provide one.
     const hasOfficial = !!c.official_url;
     const tix = document.createElement('a');
     tix.className = 'tix-btn';
-    tix.href = safeUrl(c.official_url || c.stubhub_url || '#');
+    tix.href = safeUrl(c.official_url || c.fallback_url || '#');
     tix.target = '_blank';
     tix.rel = 'noopener';
     tix.title = hasOfficial
       ? 'Official venue/box-office page for this show — face-value pricing, no resale markup'
-      : 'Search StubHub for this artist & venue';
+      : 'Search Ticketmaster for this artist & venue';
     tix.textContent = 'Get Tickets';
     card.appendChild(tix);
 
@@ -1631,7 +1631,7 @@
       lines.push('  Date  : ' + (c.date || 'TBA') + (c.time ? '  ' + c.time : ''));
       lines.push('  City  : ' + (c.city || ''));
       lines.push('  Venue : ' + (c.venue || ''));
-      lines.push('  Tickets: ' + (c.official_url || c.stubhub_url || ''));
+      lines.push('  Tickets: ' + (c.official_url || c.fallback_url || ''));
       lines.push('-'.repeat(60));
     });
 
