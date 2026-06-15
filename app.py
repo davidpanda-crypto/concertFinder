@@ -1601,26 +1601,40 @@ def scan_multi_stream():
         names: list = []
         image = ""
 
+        # Spotify harvesting drives a shared Chrome profile — only one scan
+        # (this one or the auto-scan) can use it at a time. Fail fast with a
+        # clear message instead of letting Chrome crash with a cryptic
+        # "session not created" error if both try at once.
+        if not _browser_lock.acquire(blocking=False):
+            yield sse("error", {"message": "A scan is already running (possibly the weekly auto-scan) — please try again in a few minutes."})
+            return
+
         try:
-            for source in sources:
-                try:
-                    if source == "liked":
-                        artists = yield from _harvest_liked_songs()
-                        combined_artists.update(artists)
-                        names.append("Liked Songs")
-                    else:
-                        playlist_name, playlist_image, artists = yield from scrape_spotify_playlist(source, authed=True)
-                        combined_artists.update(artists)
-                        names.append(playlist_name)
-                        if not image and playlist_image:
-                            image = playlist_image
-                except (RuntimeError, ValueError) as e:
-                    yield sse("error", {"message": str(e)})
-                    return
-                except Exception as e:
-                    log.error("Scan failed for source %s: %s", source, e)
-                    yield sse("error", {"message": f"Could not scan a selected playlist: {e}"})
-                    return
+            # Harvesting (Selenium/Chrome) is the part that needs exclusive
+            # access to the shared browser profile — release the lock as
+            # soon as it's done, before the (lock-free) Last.fm lookups.
+            try:
+                for source in sources:
+                    try:
+                        if source == "liked":
+                            artists = yield from _harvest_liked_songs()
+                            combined_artists.update(artists)
+                            names.append("Liked Songs")
+                        else:
+                            playlist_name, playlist_image, artists = yield from scrape_spotify_playlist(source, authed=True)
+                            combined_artists.update(artists)
+                            names.append(playlist_name)
+                            if not image and playlist_image:
+                                image = playlist_image
+                    except (RuntimeError, ValueError) as e:
+                        yield sse("error", {"message": str(e)})
+                        return
+                    except Exception as e:
+                        log.error("Scan failed for source %s: %s", source, e)
+                        yield sse("error", {"message": f"Could not scan a selected playlist: {e}"})
+                        return
+            finally:
+                _browser_lock.release()
 
             if not combined_artists:
                 yield sse("error", {"message": "No artists found in the selected playlists."})
@@ -1659,6 +1673,16 @@ def _drain_generator(gen):
     except StopIteration as stop:
         return stop.value
 
+
+# Selenium drives a single shared Chrome profile (SPOTIFY_PROFILE) so the
+# Spotify login persists across scans. Chrome refuses to open a second
+# instance against a profile that's already in use ("session not created:
+# Chrome instance exited"), so a manual "Scan Selected" and the auto-scan's
+# Spotify harvesting step can't run at the same time. This lock serializes
+# them: whichever starts first holds it through harvesting, and the other
+# fails fast with a clear "try again in a bit" message instead of a cryptic
+# Chrome crash.
+_browser_lock = threading.Lock()
 
 # Tracks the outcome of the most recent autoscan run (scheduled or manual)
 # so the UI can surface whether the weekly notification actually went out,
@@ -1717,19 +1741,30 @@ def _run_autoscan_once():
     names: list = []
     source_errors: list = []
 
-    for source in sources:
-        try:
-            if source == "liked":
-                artists = _drain_generator(_harvest_liked_songs())
-                combined_artists.update(artists)
-                names.append("Liked Songs")
-            else:
-                playlist_name, _, artists = _drain_generator(scrape_spotify_playlist(source, authed=True))
-                combined_artists.update(artists)
-                names.append(cfg.get("labels", {}).get(source) or playlist_name)
-        except Exception as exc:
-            log.error("Autoscan: source %s failed: %s", source, exc)
-            source_errors.append({"source": source, "error": str(exc)})
+    # Spotify harvesting needs exclusive access to the shared Chrome
+    # profile (see _browser_lock) — wait a bit for a manual scan to finish
+    # rather than crashing Chrome by colliding with it, but don't block the
+    # scheduler thread forever if something's stuck.
+    if not _browser_lock.acquire(timeout=300):
+        log.warning("Autoscan: skipped (browser busy with another scan for 5+ minutes)")
+        _set_autoscan_status(state="skipped", reason="Could not start — a manual scan was still running after 5 minutes.")
+        return
+    try:
+        for source in sources:
+            try:
+                if source == "liked":
+                    artists = _drain_generator(_harvest_liked_songs())
+                    combined_artists.update(artists)
+                    names.append("Liked Songs")
+                else:
+                    playlist_name, _, artists = _drain_generator(scrape_spotify_playlist(source, authed=True))
+                    combined_artists.update(artists)
+                    names.append(cfg.get("labels", {}).get(source) or playlist_name)
+            except Exception as exc:
+                log.error("Autoscan: source %s failed: %s", source, exc)
+                source_errors.append({"source": source, "error": str(exc)})
+    finally:
+        _browser_lock.release()
 
     if not combined_artists:
         log.warning("Autoscan: no artists found across configured sources — skipping send")
