@@ -389,6 +389,11 @@
       vertical-align: middle; letter-spacing: 0.02em;
     }
 
+    .show-date {
+      font-weight: 700;
+      color: var(--text);
+    }
+
     .tix-btn {
       flex-shrink: 0;
       display: inline-block;
@@ -1432,6 +1437,19 @@
     }
   }
 
+  // Short per-show date, e.g. "Wed, Jun 10" — used alongside the week heading
+  // so multiple shows within the same week can be told apart at a glance.
+  function formatShortDate(dateRaw) {
+    if (!dateRaw) return '';
+    try {
+      const d = new Date(dateRaw);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    } catch (e) {
+      return '';
+    }
+  }
+
   function buildShowCard(c) {
     const card = document.createElement('div');
     card.className = 'show-card';
@@ -1462,13 +1480,15 @@
     const spotifyLink = c.spotify_url
       ? ' <a class="spotify-link" href="' + safeUrl(c.spotify_url) + '" target="_blank" rel="noopener">Spotify</a>'
       : '';
-    const timeStr = c.time ? '<span>' + esc(c.time) + '</span>' : '';
+    const dateStr  = formatShortDate(c.date_raw);
+    const dateSpan = dateStr ? '<span class="show-date">' + esc(dateStr) + '</span>' : '';
+    const timeStr  = c.time ? '<span>' + esc(c.time) + '</span>' : '';
     const eventStr = (c.event_name && c.event_name !== c.artist)
       ? '<span>' + esc(c.event_name) + '</span>' : '';
 
     info.innerHTML =
       '<div class="show-artist">' + esc(c.artist) + spotifyLink + '</div>' +
-      '<div class="show-meta">' + cityBadge +
+      '<div class="show-meta">' + cityBadge + dateSpan +
         '<span>' + esc(c.venue || '') + '</span>' + timeStr + eventStr +
       '</div>';
 
