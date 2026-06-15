@@ -938,6 +938,56 @@ def _city_for_address(address: str) -> tuple:
     return None, None
 
 
+# Resale marketplaces known for steep markups over face value and/or
+# sketchy business practices (chargeback disputes, fake-listing
+# complaints, etc.). If an event page's "official" link points at one of
+# these, it's skipped in favor of the next candidate (or the StubHub
+# search fallback) — the goal is to land users on the venue's own site or
+# a primary ticketing vendor selling at face value, not an inflated resale
+# listing.
+_RESALE_MARKUP_DOMAINS = {
+    "viagogo.com",
+    "ticketnetwork.com",
+    "ticketsmarter.com",
+    "seatsnet.com",
+    "gigsberg.com",
+    "ticketcity.com",
+    "costcentral.com",
+    "centralfanclub.com",
+    "concertpass.com",
+    "vipticketplace.com",
+    "stadiumtix.com",
+    "ticketsupply.com",
+}
+
+
+def _ticket_domain(url: str) -> str:
+    """Lowercased registrable-ish domain for a URL, e.g.
+    'https://www.viagogo.com/x' -> 'viagogo.com'. Returns '' on failure."""
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+    host = host.split("@")[-1].split(":")[0]  # strip userinfo/port
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _is_safe_ticket_link(url: str) -> bool:
+    """
+    True unless `url` points at a known resale-markup/scalper domain
+    (_RESALE_MARKUP_DOMAINS) or its registrable domain otherwise looks like
+    one of those (e.g. "tickets.viagogo.com").
+    """
+    if not url:
+        return False
+    domain = _ticket_domain(url)
+    if not domain:
+        return False
+    return not any(domain == d or domain.endswith("." + d) for d in _RESALE_MARKUP_DOMAINS)
+
+
 def _event_page_extras(event_url: str):
     """
     Fetch a Last.fm event page once and pull out two things from it:
@@ -947,7 +997,8 @@ def _event_page_extras(event_url: str):
          "Arlington") are actually in the DC area.
       2. official_url — a link to the venue's own site or an official ticket
          vendor (AXS, etc.), taken from
-         a.event-detail-long-link.external-link[href^="http"].
+         a.event-detail-long-link.external-link[href^="http"], skipping any
+         that point at a known resale-markup site (_is_safe_ticket_link).
 
     Deliberately NOT used as a source: Last.fm's
     a.js-stubhub-link.stubhub-button "Buy Tickets" affiliate link. That link
@@ -956,16 +1007,20 @@ def _event_page_extras(event_url: str):
     (e.g. a "Wilco" show resolving to a "Rick Wilcox Magic Show" listing), so
     it's not safe to send users there.
 
-    Returns (None, None) if the page can't be fetched at all.
+    Returns (postal_code, official_url, fetch_ok). fetch_ok is False if the
+    page couldn't be fetched at all (request error, rate-limited, etc.) —
+    callers should treat that as "couldn't verify" rather than "verification
+    failed", so a Last.fm rate-limit blip doesn't make a real show vanish
+    from the results.
     """
     if not event_url:
-        return None, None
+        return None, None, False
     try:
         resp = _http_get(event_url)
     except requests.RequestException:
-        return None, None
+        return None, None, False
     if resp.status_code != 200:
-        return None, None
+        return None, None, False
 
     postal_code = None
     m = re.search(r'itemprop="postalCode">\s*(\d{5})', resp.text)
@@ -975,13 +1030,17 @@ def _event_page_extras(event_url: str):
     official_url = None
     soup  = BeautifulSoup(resp.text, "html.parser")
     links = soup.select("a.event-detail-long-link.external-link[href^='http']")
-    if links:
-        # When multiple links are present (e.g. a general venue page link
-        # followed by the specific show's ticket page), the last one tends
-        # to be the most specific/relevant.
-        official_url = links[-1].get("href")
+    # When multiple links are present (e.g. a general venue page link
+    # followed by the specific show's ticket page), the last one tends to
+    # be the most specific/relevant — but skip over any resale-markup
+    # domains so we never recommend an inflated listing as "official".
+    for link in reversed(links):
+        href = link.get("href")
+        if _is_safe_ticket_link(href):
+            official_url = href
+            break
 
-    return postal_code, official_url
+    return postal_code, official_url, True
 
 
 def _artist_slugs(artist_name: str) -> list:
@@ -1144,13 +1203,16 @@ def find_concerts(artist_name: str) -> list:
             # Fetch the event page once: it gives us both the venue's ZIP
             # code (needed below for ambiguous-city verification) and an
             # official venue/ticket link to send users to.
-            postal_code, official_url = _event_page_extras(url)
+            postal_code, official_url, fetch_ok = _event_page_extras(url)
 
             # "Arlington"/"Alexandria" alone are ambiguous (they also name
             # places far outside the DC area, e.g. AT&T Stadium in
             # Arlington, TX) — confirm via the venue's ZIP code before
-            # accepting the match.
-            if ambiguous_kw and not (postal_code and postal_code.startswith(_DC_AREA_ZIP_PREFIXES)):
+            # accepting the match. Only reject when the page actually loaded
+            # and showed a non-matching ZIP; if Last.fm couldn't be reached
+            # (e.g. rate-limited during a big autoscan), keep the show rather
+            # than silently dropping a real match we just couldn't verify.
+            if ambiguous_kw and fetch_ok and not (postal_code and postal_code.startswith(_DC_AREA_ZIP_PREFIXES)):
                 continue
 
             time_el  = row.select_one("time[datetime]")
@@ -1598,6 +1660,26 @@ def _drain_generator(gen):
         return stop.value
 
 
+# Tracks the outcome of the most recent autoscan run (scheduled or manual)
+# so the UI can surface whether the weekly notification actually went out,
+# and why if it didn't. Protected by _autoscan_status_lock since the
+# scheduler thread and a manual "Run Now" request can both update it.
+_autoscan_status_lock = threading.Lock()
+_autoscan_status: dict = {"state": "idle"}
+
+
+def _set_autoscan_status(**kwargs):
+    with _autoscan_status_lock:
+        _autoscan_status.clear()
+        _autoscan_status.update(kwargs)
+        _autoscan_status["updated_at"] = datetime.now().isoformat()
+
+
+def get_autoscan_status() -> dict:
+    with _autoscan_status_lock:
+        return dict(_autoscan_status)
+
+
 def _run_autoscan_once():
     """
     Run the configured weekly auto-scan: harvest artists from every saved
@@ -1612,19 +1694,28 @@ def _run_autoscan_once():
     Never raises: any failure is logged and the run is skipped, so one bad
     week (Spotify logged out, Last.fm down, SMTP misconfigured, etc.)
     doesn't take down the scheduler thread or prevent next Sunday's run.
+
+    Records its outcome in _autoscan_status (via _set_autoscan_status) at
+    every exit point so /api/autoscan/status can explain — to the second —
+    why the last run did or didn't send a notification.
     """
+    _set_autoscan_status(state="running")
+
     cfg = _load_autoscan()
     if not cfg.get("enabled"):
         log.info("Autoscan: skipped (not enabled)")
+        _set_autoscan_status(state="skipped", reason="Auto-scan is turned off.")
         return
     sources = cfg.get("sources", [])
     if not sources:
         log.info("Autoscan: skipped (no playlists/Liked Songs selected)")
+        _set_autoscan_status(state="skipped", reason="No playlists or Liked Songs are selected.")
         return
 
     log.info("Autoscan: starting weekly scan of %d source(s)", len(sources))
     combined_artists: dict = {}
     names: list = []
+    source_errors: list = []
 
     for source in sources:
         try:
@@ -1638,9 +1729,16 @@ def _run_autoscan_once():
                 names.append(cfg.get("labels", {}).get(source) or playlist_name)
         except Exception as exc:
             log.error("Autoscan: source %s failed: %s", source, exc)
+            source_errors.append({"source": source, "error": str(exc)})
 
     if not combined_artists:
         log.warning("Autoscan: no artists found across configured sources — skipping send")
+        _set_autoscan_status(
+            state="skipped",
+            reason="No artists could be loaded from the selected playlists/Liked Songs "
+                   "(Spotify session may be logged out or expired).",
+            source_errors=source_errors,
+        )
         return
 
     results: list = []
@@ -1680,6 +1778,13 @@ def _run_autoscan_once():
     flat = _flatten_results(results)
     if not flat:
         log.info("Autoscan: no upcoming shows found this week — skipping send")
+        _set_autoscan_status(
+            state="skipped",
+            reason=f"Checked {len(combined_artists)} artist(s) across {len(sources)} source(s) "
+                   "but found no upcoming shows this week.",
+            artists_checked=len(combined_artists),
+            source_errors=source_errors,
+        )
         return
 
     if len(names) <= 3:
@@ -1690,10 +1795,26 @@ def _run_autoscan_once():
     result, _ = _send_concert_digest(flat, f"Weekly Digest — {label}")
     if "error" in result:
         log.error("Autoscan: send failed: %s", result["error"])
+        _set_autoscan_status(
+            state="error",
+            reason=result["error"],
+            shows_found=len(flat),
+            artists_checked=len(combined_artists),
+            source_errors=source_errors,
+        )
     else:
         log.info(
             "Autoscan: sent weekly digest (%d show%s) to %d recipient(s), %d error(s)",
             len(flat), "" if len(flat) == 1 else "s", len(result["sent"]), len(result["errors"]),
+        )
+        _set_autoscan_status(
+            state="sent",
+            shows_found=len(flat),
+            artists_checked=len(combined_artists),
+            sent_to=result["sent"],
+            send_errors=result["errors"],
+            source_errors=source_errors,
+            label=label,
         )
 
 
@@ -1906,6 +2027,39 @@ def save_autoscan():
     }
     _save_autoscan(cfg)
     return jsonify(cfg)
+
+
+@app.route("/api/autoscan/status", methods=["GET"])
+def autoscan_status():
+    """
+    Report the outcome of the most recent autoscan run (scheduled or
+    triggered via /api/autoscan/run-now), so the UI can show whether the
+    weekly notification actually went out and, if not, why.
+    """
+    return jsonify(get_autoscan_status())
+
+
+@app.route("/api/autoscan/run-now", methods=["POST"])
+def autoscan_run_now():
+    """
+    Manually trigger the same routine the Sunday scheduler runs, in a
+    background thread (a full scan across many playlists can take minutes,
+    too long for a single HTTP request). Lets the user verify the weekly
+    email/SMS notification actually works without waiting for Sunday.
+    Poll /api/autoscan/status for the result.
+    """
+    status = get_autoscan_status()
+    if status.get("state") == "running":
+        return jsonify({"error": "An autoscan is already running"}), 409
+
+    cfg = _load_autoscan()
+    if not cfg.get("enabled"):
+        return jsonify({"error": "Auto-scan is turned off — enable and save it first."}), 400
+    if not cfg.get("sources"):
+        return jsonify({"error": "No playlists or Liked Songs are selected."}), 400
+
+    threading.Thread(target=_run_autoscan_once, name="autoscan-manual", daemon=True).start()
+    return jsonify({"started": True})
 
 
 # Email + SMS builders

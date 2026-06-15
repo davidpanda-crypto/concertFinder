@@ -549,6 +549,10 @@
       margin-top: 0.6rem;
       width: 100%;
     }
+    #autoscan-run-now {
+      margin-top: 0.4rem;
+      width: 100%;
+    }
     #autoscan-status {
       margin-top: 0.5rem;
       font-size: 0.78rem;
@@ -556,6 +560,11 @@
       min-height: 1.1em;
     }
     #autoscan-status.success { color: var(--accent); }
+    #autoscan-last-run {
+      margin-top: 0.3rem;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
 
     /* Login overlay */
     #login-overlay {
@@ -728,7 +737,9 @@
           </div>
         </label>
         <button class="btn-outline" id="autoscan-save" onclick="saveAutoscan()" disabled>Save Auto-scan Settings</button>
+        <button class="btn-outline" id="autoscan-run-now" onclick="runAutoscanNow()">Send Notification Now (Test)</button>
         <div id="autoscan-status"></div>
+        <div id="autoscan-last-run"></div>
       </div>
     </div>
 
@@ -1329,6 +1340,93 @@
         updateAutoscanBtn();
       })
       .catch(() => {});
+    refreshAutoscanLastRun();
+  }
+
+  // Show the outcome of the most recent autoscan run (scheduled or manual),
+  // so it's clear whether the weekly notification actually went out.
+  function refreshAutoscanLastRun() {
+    fetch('/api/autoscan/status')
+      .then(r => r.json())
+      .then(s => {
+        const el = $id('autoscan-last-run');
+        if (!s || !s.state || s.state === 'idle') {
+          el.textContent = '';
+          return;
+        }
+        let text = '';
+        if (s.state === 'running') {
+          text = 'Running now…';
+        } else if (s.state === 'sent') {
+          const errCount = (s.send_errors || []).length;
+          text = 'Last run: sent ' + s.shows_found + ' show' + (s.shows_found === 1 ? '' : 's') +
+            ' to ' + (s.sent_to || []).length + ' recipient' + ((s.sent_to || []).length === 1 ? '' : 's');
+          if (errCount) text += ' (' + errCount + ' failed)';
+        } else if (s.state === 'skipped') {
+          text = 'Last run: ' + (s.reason || 'skipped — nothing to send.');
+        } else if (s.state === 'error') {
+          text = 'Last run failed: ' + (s.reason || 'unknown error');
+        }
+        if (s.updated_at) {
+          try {
+            const d = new Date(s.updated_at);
+            if (!isNaN(d.getTime())) text += ' (' + d.toLocaleString() + ')';
+          } catch (e) {}
+        }
+        el.textContent = text;
+        el.className = (s.state === 'error') ? 'failed-note' : '';
+      })
+      .catch(() => {});
+  }
+
+  // Manually trigger the same routine the Sunday auto-scan runs, so the
+  // user can confirm the email/SMS notification works without waiting for
+  // Sunday. Runs in the background server-side; poll for the result.
+  function runAutoscanNow() {
+    const btn    = $id('autoscan-run-now');
+    const status = $id('autoscan-status');
+    btn.disabled = true;
+    status.textContent = 'Running auto-scan now — this can take a few minutes...';
+    status.className = '';
+
+    fetch('/api/autoscan/run-now', { method: 'POST' })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) {
+          status.textContent = body.error || 'Could not start auto-scan.';
+          status.className = '';
+          btn.disabled = false;
+          return;
+        }
+        const poll = setInterval(() => {
+          fetch('/api/autoscan/status')
+            .then(r => r.json())
+            .then(s => {
+              if (s.state === 'running') return;
+              clearInterval(poll);
+              btn.disabled = false;
+              refreshAutoscanLastRun();
+              if (s.state === 'sent') {
+                status.textContent = 'Sent! Check your inbox.';
+                status.className = 'success';
+              } else if (s.state === 'skipped') {
+                status.textContent = s.reason || 'Nothing to send.';
+                status.className = '';
+              } else if (s.state === 'error') {
+                status.textContent = 'Failed: ' + (s.reason || 'unknown error');
+                status.className = '';
+              } else {
+                status.textContent = '';
+              }
+            })
+            .catch(() => { clearInterval(poll); btn.disabled = false; });
+        }, 3000);
+      })
+      .catch(() => {
+        status.textContent = 'Could not start auto-scan.';
+        status.className = '';
+        btn.disabled = false;
+      });
   }
 
   // Enables the "Save Auto-scan Settings" button once there's something
@@ -1503,7 +1601,9 @@
     tix.href = safeUrl(c.official_url || c.stubhub_url || '#');
     tix.target = '_blank';
     tix.rel = 'noopener';
-    tix.title = hasOfficial ? 'Go to the official ticket page for this show' : 'Search StubHub for this artist & venue';
+    tix.title = hasOfficial
+      ? 'Official venue/box-office page for this show — face-value pricing, no resale markup'
+      : 'Search StubHub for this artist & venue';
     tix.textContent = 'Get Tickets';
     card.appendChild(tix);
 
