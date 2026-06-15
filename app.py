@@ -1108,16 +1108,17 @@ def _fallback_ticket_url(artist_name: str, venue: str) -> str:
     Best-effort ticket search link for a show when Last.fm's event page
     doesn't provide an official venue/vendor link (official_url).
 
-    Points to Ticketmaster's search results for "<artist> <venue>".
-    Ticketmaster is a primary, face-value ticketing vendor for most venues —
-    no account/API key needed to deep-link to a search, and it's generally
-    safer and less markup-prone than a resale marketplace like StubHub or
-    Viagogo. The user can confirm pricing/availability and pick the right
-    event themselves, while the date/venue/city shown in this app still
-    comes from the verified Last.fm match.
+    Points to a Google search for "<artist> <venue> tickets". Ticket-vendor
+    search pages (Ticketmaster, AXS, etc.) sometimes return 403/"Access
+    Denied" depending on the visitor's IP/browser (bot-detection), which we
+    can't predict or control. A plain Google search always loads, is safe
+    (google.com), and surfaces face-value vendors (Ticketmaster, AXS, venue
+    box office, etc.) alongside resale options so the user can pick the
+    cheapest legitimate listing themselves — while the date/venue/city shown
+    in this app still comes from the verified Last.fm match.
     """
-    query = " ".join(part for part in (artist_name, venue) if part).strip()
-    return "https://www.ticketmaster.com/search?q=" + urllib.parse.quote(query)
+    query = " ".join(part for part in (artist_name, venue, "tickets") if part).strip()
+    return "https://www.google.com/search?q=" + urllib.parse.quote(query)
 
 
 def _fmt_datetime(iso: str) -> tuple:
@@ -1251,7 +1252,7 @@ def find_concerts(artist_name: str) -> list:
                 "tickets_url": url,
                 # Official venue/ticket-vendor link for this specific show,
                 # when Last.fm's event page provides one. Falls back to a
-                # Ticketmaster search (fallback_url) when absent.
+                # Google ticket search (fallback_url) when absent.
                 "official_url": official_url or "",
                 "fallback_url": _fallback_ticket_url(artist_name, venue),
             })
@@ -2163,7 +2164,7 @@ def _build_email_html(flat: list, playlist_name: str) -> str:
             f'border-radius:4px;font-size:12px;font-weight:700">{html.escape(c.get("city",""))}</span>'
             f'</td>'
             # Prefer the official venue/ticket-vendor link for this specific
-            # show (from Last.fm's event page); fall back to a Ticketmaster
+            # show (from Last.fm's event page); fall back to a Google ticket
             # search if Last.fm didn't provide one.
             f'<td style="padding:10px 12px;white-space:nowrap">'
             f'  <a href="{_safe_url(c.get("official_url") or c.get("fallback_url",""))}" style="background:linear-gradient(120deg,#a855f7,#ec4899);'

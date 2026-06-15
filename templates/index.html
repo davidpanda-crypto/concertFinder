@@ -1594,7 +1594,7 @@
 
     // Prefer the official venue/ticket-vendor link for this specific show
     // (pulled from the show's Last.fm event page); fall back to a
-    // Ticketmaster search if Last.fm didn't provide one.
+    // Google ticket search if Last.fm didn't provide one.
     const hasOfficial = !!c.official_url;
     const tix = document.createElement('a');
     tix.className = 'tix-btn';
@@ -1603,7 +1603,7 @@
     tix.rel = 'noopener';
     tix.title = hasOfficial
       ? 'Official venue/box-office page for this show — face-value pricing, no resale markup'
-      : 'Search Ticketmaster for this artist & venue';
+      : 'Search Google for tickets to this show';
     tix.textContent = 'Get Tickets';
     card.appendChild(tix);
 
