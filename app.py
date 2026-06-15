@@ -987,6 +987,39 @@ def _artist_slugs(artist_name: str) -> list:
     return slugs
 
 
+def _normalize_artist_name(name: str) -> str:
+    """Lowercase, drop punctuation/'the'/and-equivalents, collapse whitespace —
+    so "Florence + the Machine" and "florence and machine" compare equal."""
+    name = name.lower()
+    name = re.sub(r"[&+]", " and ", name)
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    name = re.sub(r"\bthe\b", "", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _artist_name_matches(page_name: str, requested: str) -> bool:
+    """
+    True if a Last.fm artist page's <h1> name plausibly corresponds to the
+    artist we searched for.
+
+    Last.fm creates an artist page for *any* slug, even ones with no real
+    listings — so a slug variant (especially the cleaned/first-of-duo
+    variants from _artist_slugs) can land on a completely different,
+    unrelated artist's page. Comparing the page's actual name against what
+    we searched for catches that case before its events get attributed to
+    the wrong artist.
+
+    The comparison is deliberately lenient (exact match, or one name being a
+    word-prefix of the other) to allow for "Florence" matching "Florence +
+    the Machine" — the truncated slug variant for dual-artist names is
+    expected to land on the full act's page.
+    """
+    a, b = _normalize_artist_name(page_name), _normalize_artist_name(requested)
+    if not a or not b:
+        return True  # can't tell — don't block on it
+    return a == b or a.startswith(b + " ") or b.startswith(a + " ")
+
+
 def _stubhub_search_url(artist_name: str, venue: str) -> str:
     """
     Best-effort StubHub search link for a show.
@@ -1049,7 +1082,18 @@ def find_concerts(artist_name: str) -> list:
                 break
             any_page_loaded = True
 
-            soup      = BeautifulSoup(resp.text, "html.parser")
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            if page == 1:
+                h1 = soup.select_one("h1[itemprop='name']")
+                if h1 and not _artist_name_matches(h1.get_text(strip=True), artist_name):
+                    log.debug(
+                        "Last.fm slug %s resolved to a different artist (%r vs %r) — skipping",
+                        slug, h1.get_text(strip=True), artist_name,
+                    )
+                    rows = []
+                    break  # this slug landed on an unrelated artist — try next variant
+
             page_rows = soup.select("tr.events-list-item[itemprop='event']")
             if not page_rows:
                 break
