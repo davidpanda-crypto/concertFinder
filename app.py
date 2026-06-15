@@ -50,6 +50,17 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+class ConcertLookupError(Exception):
+    """
+    Raised by find_concerts() when Last.fm couldn't be reached/parsed for an
+    artist at all (every slug variant errored or returned a non-200), as
+    opposed to a successful lookup that simply found no upcoming shows.
+    Lets callers tell "checked, nothing found" apart from "couldn't check —
+    results may be incomplete" so the latter can be surfaced to the user.
+    """
+
+
 # Constants
 
 # Scroll behaviour
@@ -1017,7 +1028,12 @@ def find_concerts(artist_name: str) -> list:
     Return upcoming concerts for artist_name in any watched city,
     sorted earliest first and deduplicated by (date, venue).
     Tries multiple slug variants until one returns event rows.
+
+    Raises ConcertLookupError if every slug variant failed to load at all
+    (request error or non-200 on the first page) — i.e. Last.fm couldn't be
+    checked for this artist, as distinct from a clean "no events" result.
     """
+    any_page_loaded = False
     for slug in _artist_slugs(artist_name):
         rows = []
         for page in range(1, _MAX_EVENT_PAGES + 1):
@@ -1031,6 +1047,7 @@ def find_concerts(artist_name: str) -> list:
                 break
             if resp.status_code != 200:
                 break
+            any_page_loaded = True
 
             soup      = BeautifulSoup(resp.text, "html.parser")
             page_rows = soup.select("tr.events-list-item[itemprop='event']")
@@ -1109,6 +1126,8 @@ def find_concerts(artist_name: str) -> list:
                 deduped.append(e)
         return sorted(deduped, key=lambda e: e["date_raw"])
 
+    if not any_page_loaded:
+        raise ConcertLookupError(artist_name)
     return []
 
 
@@ -1151,6 +1170,21 @@ def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str)
 
     found_count = 0
     completed = 0
+    failed: list = []
+
+    def emit_result(artist, concerts):
+        nonlocal found_count
+        if concerts:
+            found_count += 1
+            spotify_url = artists_map.get(artist, "")
+            return sse("result", {
+                "artist":      artist,
+                "spotify_url": spotify_url,
+                "image":       _artist_image(spotify_url),
+                "concerts":    concerts,
+            })
+        return None
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONCERT_WORKERS) as executor:
         future_to_artist = {executor.submit(find_concerts, artist): artist for artist in artists}
         for future in concurrent.futures.as_completed(future_to_artist):
@@ -1159,20 +1193,39 @@ def _stream_concerts(artists_map: dict, playlist_name: str, playlist_image: str)
             yield sse("progress", {"current": completed, "total": len(artists), "artist": artist})
             try:
                 concerts = future.result()
+            except ConcertLookupError:
+                failed.append(artist)
+                continue
             except Exception as exc:
                 log.debug("Concert lookup failed for %s: %s", artist, exc)
                 concerts = []
-            if concerts:
-                found_count += 1
-                spotify_url = artists_map.get(artist, "")
-                yield sse("result", {
-                    "artist":      artist,
-                    "spotify_url": spotify_url,
-                    "image":       _artist_image(spotify_url),
-                    "concerts":    concerts,
-                })
+            event = emit_result(artist, concerts)
+            if event:
+                yield event
 
-    yield sse("done", {"total_artists": len(artists), "artists_with_shows": found_count})
+    # Last.fm couldn't be reached/parsed at all for these artists (as opposed
+    # to a clean "no shows" result) — give each one a single retry now that
+    # the bulk of the concurrent load has finished, so a transient rate-limit
+    # blip doesn't quietly drop an artist from the results.
+    if failed:
+        yield sse("status", {"message": f"Retrying {len(failed)} artist(s) after rate limiting..."})
+        still_failed: list = []
+        for artist in failed:
+            try:
+                concerts = find_concerts(artist)
+            except ConcertLookupError:
+                still_failed.append(artist)
+                continue
+            event = emit_result(artist, concerts)
+            if event:
+                yield event
+        failed = still_failed
+
+    yield sse("done", {
+        "total_artists":      len(artists),
+        "artists_with_shows": found_count,
+        "failed_artists":     failed,
+    })
 
 
 def _sse_response(generator) -> Response:
@@ -1514,17 +1567,38 @@ def _run_autoscan_once():
         return
 
     results: list = []
+    failed: list = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONCERT_WORKERS) as executor:
         future_to_artist = {executor.submit(find_concerts, a): a for a in combined_artists}
         for future in concurrent.futures.as_completed(future_to_artist):
             artist = future_to_artist[future]
             try:
                 concerts = future.result()
+            except ConcertLookupError:
+                failed.append(artist)
+                continue
             except Exception as exc:
                 log.debug("Autoscan: lookup failed for %s: %s", artist, exc)
                 concerts = []
             if concerts:
                 results.append({"artist": artist, "concerts": concerts})
+
+    # Give artists that couldn't be checked at all (rate-limited, etc.) one
+    # retry now that the bulk of the concurrent load has finished, so a
+    # transient blip doesn't silently drop them from the weekly digest.
+    if failed:
+        log.info("Autoscan: retrying %d artist(s) after rate limiting", len(failed))
+        still_failed = []
+        for artist in failed:
+            try:
+                concerts = find_concerts(artist)
+            except ConcertLookupError:
+                still_failed.append(artist)
+                continue
+            if concerts:
+                results.append({"artist": artist, "concerts": concerts})
+        if still_failed:
+            log.warning("Autoscan: could not check %d artist(s): %s", len(still_failed), ", ".join(still_failed))
 
     flat = _flatten_results(results)
     if not flat:

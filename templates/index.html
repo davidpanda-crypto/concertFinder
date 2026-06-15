@@ -228,6 +228,12 @@
       color: var(--muted);
     }
     #summary strong { color: var(--accent); }
+    .failed-note {
+      display: block;
+      margin-top: 0.4rem;
+      font-size: 0.78rem;
+      color: #f59e0b;
+    }
 
     /* Email panel */
     .panel-header {
@@ -1109,7 +1115,7 @@
     });
 
     es.addEventListener('done', e => {
-      const { artists_with_shows, total_artists } = JSON.parse(e.data);
+      const { artists_with_shows, total_artists, failed_artists } = JSON.parse(e.data);
       es.close();
       $id('progress-section').style.display = 'none';
       setControlsDisabled(false);
@@ -1117,6 +1123,12 @@
       $id('summary-row').style.display = 'flex';
       $id('dl-btn').style.display = artists_with_shows > 0 ? '' : 'none';
       refreshSendBtn();
+
+      const failedNote = (failed_artists && failed_artists.length)
+        ? '<div class="failed-note">Couldn’t check ' + failed_artists.length + ' artist' +
+          (failed_artists.length !== 1 ? 's' : '') + ' on Last.fm (' + esc(failed_artists.join(', ')) +
+          ') — rerun the scan to include ' + (failed_artists.length !== 1 ? 'them' : 'it') + '.</div>'
+        : '';
 
       if (total_artists === 0) {
         $id('summary').textContent = 'No artists were found in that playlist.';
@@ -1129,12 +1141,12 @@
           'Found <strong>' + showCount + '</strong> show' + (showCount !== 1 ? 's' : '') +
           ' from <strong>' + artists_with_shows + '</strong> artist' +
           (artists_with_shows !== 1 ? 's' : '') +
-          ' out of ' + total_artists + ' in the playlist.';
+          ' out of ' + total_artists + ' in the playlist.' + failedNote;
         renderResults();
         $id('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else {
-        $id('summary').textContent =
-          'No upcoming shows found in any watched city for the ' + total_artists + ' artists.';
+        $id('summary').innerHTML =
+          'No upcoming shows found in any watched city for the ' + total_artists + ' artists.' + failedNote;
         $id('results').innerHTML =
           '<div class="empty-state"><div class="empty-icon">\u{1F3B8}</div><h3>No shows found</h3>' +
           '<p>Try a different playlist or check back when your artists announce new dates.</p></div>';
