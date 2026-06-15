@@ -884,6 +884,12 @@ _AMBIGUOUS_CITY_KEYWORDS = {
 #   223x       Alexandria, VA
 _DC_AREA_ZIP_PREFIXES = ("20", "210", "211", "220", "221", "222", "223")
 
+# Last.fm's /+events page caps each page at 30 rows and paginates the rest
+# (?page=2, ?page=3, ...). Heavily-touring artists (e.g. Metallica) routinely
+# have 30+ upcoming shows, so without following pagination, shows on later
+# pages — including ones in watched cities — would silently never be seen.
+_MAX_EVENT_PAGES = 5
+
 
 def _city_for_address(address: str) -> tuple:
     """
@@ -1013,16 +1019,28 @@ def find_concerts(artist_name: str) -> list:
     Tries multiple slug variants until one returns event rows.
     """
     for slug in _artist_slugs(artist_name):
-        try:
-            resp = _http_get(f"https://www.last.fm/music/{slug}/+events")
-        except requests.RequestException as exc:
-            log.debug("Last.fm request failed for %s: %s", artist_name, exc)
-            continue
-        if resp.status_code != 200:
-            continue
+        rows = []
+        for page in range(1, _MAX_EVENT_PAGES + 1):
+            url = f"https://www.last.fm/music/{slug}/+events"
+            if page > 1:
+                url += f"?page={page}"
+            try:
+                resp = _http_get(url)
+            except requests.RequestException as exc:
+                log.debug("Last.fm request failed for %s: %s", artist_name, exc)
+                break
+            if resp.status_code != 200:
+                break
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        rows = soup.select("tr.events-list-item[itemprop='event']")
+            soup      = BeautifulSoup(resp.text, "html.parser")
+            page_rows = soup.select("tr.events-list-item[itemprop='event']")
+            if not page_rows:
+                break
+            rows.extend(page_rows)
+
+            if not soup.select_one(".pagination-next a[data-pagination-link]"):
+                break  # no more pages
+
         if not rows:
             continue  # this slug returned no events — try next variant
 
