@@ -1422,10 +1422,20 @@ _LOGIN_URL = (
 )
 
 
-def _harvest_liked_songs():
+def _harvest_liked_songs(headless: bool = False):
     """
-    Generator: opens a visible Spotify browser window (handling login if
-    needed) and harvests the Liked Songs artist list with live progress.
+    Generator: opens a Spotify browser window (handling login if needed) and
+    harvests the Liked Songs artist list with live progress.
+
+    headless=False (the default, used by the interactive "Scan Selected" UI)
+    opens a visible window so the user can log in if the saved session has
+    expired. headless=True (used by the unattended weekly autoscan) reuses
+    the already-saved login from SPOTIFY_PROFILE without ever popping a
+    window — there's no one at the screen to click through a login prompt
+    during a scheduled run, and a visible Chrome window can fail to launch
+    at all on a headless/locked machine, crashing the whole run. If the
+    saved session has expired, this raises a clear RuntimeError instead of
+    waiting for a login that will never happen.
 
     Yields SSE strings ("status"/"login_required") and returns
     {artist_name: spotify_url} via StopIteration.value.
@@ -1434,11 +1444,11 @@ def _harvest_liked_songs():
     SPOTIFY_PROFILE.mkdir(parents=True, exist_ok=True)
     driver = None
     try:
-        yield sse("status", {"message": "Opening Spotify in a browser window..."})
+        yield sse("status", {"message": "Opening Spotify..."})
         try:
-            driver = _make_driver(headless=False, profile_dir=SPOTIFY_PROFILE)
+            driver = _make_driver(headless=headless, profile_dir=SPOTIFY_PROFILE)
         except Exception as exc:
-            log.error("Could not open visible browser for Liked Songs: %s", exc)
+            log.error("Could not open browser for Liked Songs: %s", exc)
             raise RuntimeError(
                 "Liked Songs needs a desktop browser window and only works "
                 "when running this app on your own computer — not in the cloud."
@@ -1449,6 +1459,11 @@ def _harvest_liked_songs():
         _dismiss_app_prompt(driver)
 
         if "collection/tracks" not in driver.current_url:
+            if headless:
+                raise RuntimeError(
+                    "Spotify login has expired — open the app and run "
+                    "\"Scan Selected\" for Liked Songs once to log back in."
+                )
             driver.get(_LOGIN_URL)
             yield sse("login_required", {
                 "message": "Please log into Spotify in the browser window. "
@@ -1755,7 +1770,10 @@ def _run_autoscan_once():
         for source in sources:
             try:
                 if source == "liked":
-                    artists = _drain_generator(_harvest_liked_songs())
+                    # headless=True: this runs unattended on a schedule, so
+                    # there's no one at the screen to handle a visible
+                    # login window (see _harvest_liked_songs docstring).
+                    artists = _drain_generator(_harvest_liked_songs(headless=True))
                     combined_artists.update(artists)
                     names.append("Liked Songs")
                 else:

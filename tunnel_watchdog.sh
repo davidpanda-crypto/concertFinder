@@ -43,8 +43,13 @@ while true; do
     start_tunnel
   fi
 
-  # Extract/update the current public URL from the tunnel log
-  url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$TUNNEL_LOG" | tail -1)
+  # Extract/update the current public URL from the tunnel log.
+  # -a forces text mode: if the log ever ends up with stray NUL bytes
+  # (e.g. a truncate racing an old process still writing to the same
+  # inode during a fast restart), plain grep treats it as binary and
+  # prints "Binary file ... matches" instead of the URL — which then
+  # gets written to URL_FILE verbatim, breaking the public link.
+  url=$(grep -aoE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$TUNNEL_LOG" | tail -1)
   if [ -n "$url" ] && [ "$url" != "$(cat "$URL_FILE" 2>/dev/null)" ]; then
     echo "$url" > "$URL_FILE"
     echo "[$(date)] tunnel URL: $url"
